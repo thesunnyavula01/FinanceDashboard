@@ -1,0 +1,12 @@
+# Normalize to LF in the repo so Linux build machines (Cloudflare) are happy.
+* text=auto eol=lf
+
+# Binary assets - never touch
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.pdf binary

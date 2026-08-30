@@ -70,9 +70,11 @@ export function StatusRail({
           {!authoritative && (
             <span
               className="label label-ink"
-              title="Estimated from New York trading hours. Holiday-aware market clock arrives in Phase 3."
+              // Not "(est)": sitting beside an ET clock, that reads as a
+              // timezone rather than as "this status is a guess".
+              title="Estimated from New York trading hours; does not know holidays. The real market clock arrives in Phase 3."
             >
-              (est)
+              Estimated
             </span>
           )}
         </span>

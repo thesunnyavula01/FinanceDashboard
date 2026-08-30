@@ -6,6 +6,8 @@
  * stay in the Worker.
  */
 
+import { accessToken } from "./supabase";
+
 export type SessionState = "OPEN" | "CLOSED" | "PRE" | "POST";
 
 export interface HealthResponse {
@@ -35,11 +37,44 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`/api${path}`, {
-    ...init,
-    headers: { "content-type": "application/json", ...init?.headers },
-  });
+export interface MeResponse {
+  id: string;
+  email: string | null;
+  displayName: string;
+  role: "member" | "admin";
+  portfolio: {
+    id: string;
+    cash: string;
+    season_id: string;
+    seasons: {
+      name: string;
+      starting_cash: string;
+      trading_locked: boolean;
+      is_active: boolean;
+    } | null;
+  } | null;
+}
+
+interface RequestOptions extends RequestInit {
+  /** Attach the current session token. Required by every route behind auth. */
+  authed?: boolean;
+}
+
+async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
+  const { authed, ...init } = options;
+
+  const headers: Record<string, string> = {
+    "content-type": "application/json",
+    ...(init.headers as Record<string, string> | undefined),
+  };
+
+  if (authed) {
+    const token = await accessToken();
+    if (!token) throw new ApiError("Sign in to continue.", 401);
+    headers.Authorization = `Bearer ${token}`;
+  }
+
+  const response = await fetch(`/api${path}`, { ...init, headers });
 
   if (!response.ok) {
     const body = (await response.json().catch(() => null)) as { error?: string } | null;
@@ -51,4 +86,5 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   health: () => request<HealthResponse>("/health"),
+  me: () => request<MeResponse>("/auth/me", { authed: true }),
 };

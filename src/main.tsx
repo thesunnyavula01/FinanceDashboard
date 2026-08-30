@@ -11,6 +11,7 @@ import "@fontsource/ibm-plex-mono/500.css";
 import "@fontsource/ibm-plex-mono/600.css";
 
 import "./styles/terminal.css";
+import { AuthProvider } from "./lib/auth";
 import { App } from "./App";
 
 const queryClient = new QueryClient({
@@ -29,7 +30,9 @@ createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>
-        <App />
+        <AuthProvider>
+          <App />
+        </AuthProvider>
       </BrowserRouter>
     </QueryClientProvider>
   </StrictMode>,

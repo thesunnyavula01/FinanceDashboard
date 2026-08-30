@@ -44,6 +44,7 @@
 
   "vars": {
     "APP_NAME": "FINANCE CLUB TERMINAL",
+    "SUPABASE_URL": "https://vtlqkgpcfdhslqahivzf.supabase.co",
     "ALPACA_DATA_FEED": "iex",
     "QUOTE_CACHE_TTL": "20"
   }

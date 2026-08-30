@@ -16,6 +16,9 @@ interface StatusRailProps {
   /** False until Phase 3 replaces the estimate with Alpaca's real market clock. */
   authoritative: boolean;
   connected: boolean;
+  displayName?: string;
+  role?: "member" | "admin";
+  onSignOut?: () => void;
 }
 
 /**
@@ -30,6 +33,9 @@ export function StatusRail({
   sessionLabel,
   authoritative,
   connected,
+  displayName,
+  role,
+  onSignOut,
 }: StatusRailProps) {
   const [now, setNow] = useState(() => clockET());
 
@@ -74,6 +80,24 @@ export function StatusRail({
         <span className="num text-ink-dim text-[0.6875rem]">
           {now} <span className="text-ink-faint">ET</span>
         </span>
+
+        {displayName && (
+          <span className="flex items-center gap-2 border-l border-line pl-4">
+            <span className="text-ink-dim">
+              {displayName}
+              {role === "admin" && <span className="label ml-1.5 text-accent">Admin</span>}
+            </span>
+            {onSignOut && (
+              <button
+                type="button"
+                onClick={onSignOut}
+                className="label cursor-pointer hover:text-accent"
+              >
+                Sign out
+              </button>
+            )}
+          </span>
+        )}
       </div>
     </div>
   );

@@ -13,6 +13,7 @@ export interface Env {
 
   // Vars (public, declared in wrangler.jsonc)
   APP_NAME: string;
+  SUPABASE_URL: string;
   ALPACA_DATA_FEED: string;
   QUOTE_CACHE_TTL: string;
 

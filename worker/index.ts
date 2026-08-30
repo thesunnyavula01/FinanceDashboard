@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import type { AppBindings, Env } from "./types";
 import { health } from "./routes/health";
+import { auth } from "./routes/auth";
 
 const app = new Hono<AppBindings>();
 
@@ -10,6 +11,7 @@ const app = new Hono<AppBindings>();
  * from the asset store and never invoke this script.
  */
 app.route("/api/health", health);
+app.route("/api/auth", auth);
 
 // Unknown API paths must answer with JSON. Without this they would fall through
 // to the SPA shell and the client would try to parse HTML as JSON.

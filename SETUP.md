@@ -93,6 +93,38 @@ site URL **and** this code can create an account; anyone without it cannot.
 
 ---
 
+## 6. Windows: install the Visual C++ runtime
+
+**Required on this machine — `npm run dev` cannot start without it.**
+
+Cloudflare's local runtime is a native Windows binary called `workerd`, and it
+needs Microsoft's C++ runtime libraries. That runtime is currently not installed
+here, so `workerd.exe` fails to load with `STATUS_DLL_NOT_FOUND` and both
+`vite dev` and `wrangler dev` stop with a bare `write EOF`.
+
+Install it once, from an ordinary terminal:
+
+```
+winget install --id Microsoft.VCRedist.2015+.x64
+```
+
+Or download "Visual C++ Redistributable for Visual Studio 2015-2022 (x64)" from
+<https://aka.ms/vs/17/release/vc_redist.x64.exe> and run it. Reboot if prompted.
+
+Verify it worked:
+
+```
+node_modules\@cloudflare\workerd-windows-64\bin\workerd.exe --version
+```
+
+That should print a version string. If it prints nothing and exits, the runtime
+still is not installed.
+
+**This affects local development only.** `npm run build` works without it, and
+so does the deployed site — Cloudflare runs the Worker on its own machines.
+
+---
+
 ## Done?
 
 `.env` should have 2 filled values, `.dev.vars` should have 6 filled values plus

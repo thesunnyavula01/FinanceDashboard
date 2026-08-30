@@ -1,21 +1,20 @@
 # Deploying to Cloudflare
 
-## Read this first: do not connect Cloudflare yet
+## Before you deploy: create the KV namespace
 
-This repository is at **Phase 0**. There is no `package.json`, no
-`wrangler.jsonc`, and no application code yet. Cloudflare Workers Builds needs
-all three to run a build.
+`wrangler.jsonc` ships with a placeholder KV id, and **`wrangler deploy` will
+fail until it is replaced.** Create the namespace once:
 
-If you connect the repo to Cloudflare right now, the first build **will fail** —
-harmlessly, but it will fail. Nothing is broken; there is simply nothing to
-build.
+```
+npx wrangler kv namespace create QUOTES
+```
 
-**Correct order:**
+Paste the returned `id` over `PLACEHOLDER_RUN_WRANGLER_KV_NAMESPACE_CREATE_QUOTES`
+in `wrangler.jsonc`. That namespace is the shared quote cache — it is what keeps
+100 members refreshing every 20 seconds inside the free API rate limit.
 
-1. Push this repo to GitHub ✅ (done)
-2. Finish `SETUP.md` — create the accounts, collect the keys
-3. Build Phase 1 — scaffold, `package.json`, `wrangler.jsonc`
-4. **Then** connect Cloudflare using the steps below
+The app builds and the SPA renders without it; only the Worker needs it, from
+Phase 3 onward.
 
 ---
 
@@ -55,7 +54,12 @@ the Worker cannot read them at request time and every quote and order returns a
 
 ---
 
-## Connecting the repository (do this after Phase 1)
+## Connecting the repository
+
+Phase 1 is complete, so the repo now has everything Workers Builds needs: a
+`package.json`, a `wrangler.jsonc`, and a build that produces `dist/client`.
+Connecting now will succeed — the deployed site will render the terminal with
+sample data until Phase 3 wires up live prices.
 
 1. Cloudflare dashboard → **Workers & Pages** → **Create** → **Import a repository**
 2. Authorize GitHub, pick `thesunnyavula01/FinanceDashboard`

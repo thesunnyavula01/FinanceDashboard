@@ -1,0 +1,53 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "finance-club-terminal",
+  "main": "./worker/index.ts",
+  "compatibility_date": "2026-08-30",
+  "compatibility_flags": ["nodejs_compat"],
+
+  "observability": {
+    "enabled": true
+  },
+
+  "assets": {
+    "directory": "./dist/client",
+    "binding": "ASSETS",
+
+    // Unmatched routes serve index.html so React Router can handle deep links
+    // like /leaderboard on a hard refresh.
+    "not_found_handling": "single-page-application",
+
+    // Without this, `not_found_handling` would swallow /api/* and return the
+    // HTML shell instead of JSON. Listing the API prefix explicitly is what
+    // routes those requests to the Worker; everything else is served straight
+    // from the asset store and never costs a Worker invocation.
+    "run_worker_first": ["/api/*"]
+  },
+
+  // Shared quote cache. One entry per symbol, ~20s TTL, so 100 members hitting
+  // the dashboard at once still trigger only a couple of upstream fetches.
+  // Create with: npx wrangler kv namespace create QUOTES
+  // then paste the returned id below.
+  "kv_namespaces": [
+    {
+      "binding": "QUOTES",
+      "id": "PLACEHOLDER_RUN_WRANGLER_KV_NAMESPACE_CREATE_QUOTES"
+    }
+  ],
+
+  // Nightly portfolio + benchmark snapshots. 21:30 UTC is after the US close
+  // year-round (5:30pm ET in summer, 4:30pm ET in winter). The handler checks
+  // whether the market actually traded before writing anything.
+  "triggers": {
+    "crons": ["30 21 * * 1-5"]
+  },
+
+  "vars": {
+    "APP_NAME": "FINANCE CLUB TERMINAL",
+    "ALPACA_DATA_FEED": "iex",
+    "QUOTE_CACHE_TTL": "20"
+  }
+
+  // Secrets are NOT listed here. They come from .dev.vars locally and from
+  // `wrangler secret put` in production. See DEPLOYMENT.md.
+}

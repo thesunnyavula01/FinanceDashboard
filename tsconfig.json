@@ -1,0 +1,10 @@
+{
+  // Solution file. Editors read this to route each folder to the right config;
+  // `npm run typecheck` runs the three projects explicitly.
+  "files": [],
+  "references": [
+    { "path": "./tsconfig.app.json" },
+    { "path": "./tsconfig.worker.json" },
+    { "path": "./tsconfig.node.json" }
+  ]
+}

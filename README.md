@@ -49,5 +49,6 @@ and putting them in the wrong one is the most common way this breaks.
 
 ## Status
 
-Phase 0 of 7 complete — repository hygiene, environment scaffolding, and
-credential documentation. The application itself starts at Phase 1.
+Phase 1 of 7 complete — the Worker, the SPA, and the black/amber terminal
+design system are running. The Positions screen currently shows sample data;
+live prices arrive in Phase 3 and real trading in Phase 4.

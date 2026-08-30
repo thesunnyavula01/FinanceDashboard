@@ -196,16 +196,22 @@ src/routes/                     Login, Dashboard, Trade, Leaderboard, Sectors, A
 ## Commands
 
 ```
-npm run dev        vite + wrangler dev together
-npm run build      typecheck + production bundle
+npm run dev        vite dev; the Cloudflare plugin runs the Worker inside
+                   workerd, so the SPA and the API share one port
+npm run build      typecheck + bundle -> dist/client and dist/<worker-name>
 npm run deploy     build + wrangler deploy
-npm run typecheck  tsc --noEmit
+npm run typecheck  tsc across the app, worker, and node configs
 ```
+
+**Windows prerequisite:** `workerd` is a native binary that needs the Microsoft
+Visual C++ Redistributable. Without it `npm run dev` dies with a bare
+`write EOF`, which reads like a config error and is not one. See `SETUP.md`
+step 6. Build and deploy are unaffected.
 
 ## Phase status
 
 - [x] **Phase 0** - repo hygiene, env scaffolding, credential checklist (`SETUP.md`)
-- [ ] **Phase 1** - scaffold + terminal design system
+- [x] **Phase 1** - scaffold + terminal design system
 - [ ] **Phase 2** - auth (invite-code signup, protected routes)
 - [ ] **Phase 3** - market data layer (Alpaca proxy, KV cache, sector enrichment)
 - [ ] **Phase 4** - trading engine (`place_order()` RPC, order ticket, blotter)

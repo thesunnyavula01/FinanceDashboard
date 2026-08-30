@@ -1,0 +1,219 @@
+@import "tailwindcss";
+
+/* ============================================================================
+   Design tokens
+   Amber phosphor on true black. Density is the aesthetic: every value here is
+   tuned so a member can read twenty rows at a glance without scrolling.
+   ========================================================================= */
+
+@theme {
+  /* Surfaces. The gap between canvas and panel is deliberately tiny — panels
+     are separated by their hairline border, not by contrast. */
+  --color-canvas: #000000;
+  --color-panel: #0b0b0b;
+  --color-panel-hi: #131313;
+  --color-line: #1c1c1c;
+  --color-line-hi: #2a2a2a;
+
+  /* Amber is the interface: headers, keys, focus, active state. It is never
+     used for a number, so it can never be confused with P/L. */
+  --color-accent: #ffb000;
+  --color-accent-dim: #8a5f00;
+  --color-accent-wash: #1a1200;
+
+  /* P/L only. Nothing decorative is ever green or red. */
+  --color-gain: #26d07c;
+  --color-loss: #ff4d4d;
+
+  /* Text. Pure white on pure black vibrates; #e8e8e8 reads calmer at 12px. */
+  --color-ink: #e8e8e8;
+  --color-ink-dim: #8a8a8a;
+  --color-ink-faint: #5a5a5a;
+
+  --font-ui: "Inter Variable", Inter, system-ui, -apple-system, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+
+  /* One grid row. Changing this rescales every table in the app. */
+  --spacing-row: 1.75rem; /* 28px */
+
+  --text-label: 0.625rem; /* 10px — uppercase column headers */
+  --text-data: 0.75rem; /* 12px — the base size for everything */
+  --text-lede: 0.9375rem; /* 15px — panel headline figures */
+  --text-hero: 1.75rem; /* 28px — NAV, and nothing else */
+}
+
+/* ============================================================================
+   Base
+   ========================================================================= */
+
+@layer base {
+  * {
+    border-color: var(--color-line);
+  }
+
+  html {
+    color-scheme: dark;
+  }
+
+  body {
+    background-color: var(--color-canvas);
+    color: var(--color-ink);
+    font-family: var(--font-ui);
+    font-size: var(--text-data);
+    line-height: 1.35;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  /* Every number in this app is monospaced and tabular so columns stay locked
+     as prices tick. This is the single most important typographic rule here —
+     without it the whole grid shivers on every refresh. */
+  .num,
+  input[type="number"],
+  code,
+  kbd,
+  pre {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum" 1, "zero" 1;
+  }
+
+  /* Amber focus ring, always visible for keyboard users. */
+  :focus-visible {
+    outline: 1px solid var(--color-accent);
+    outline-offset: 1px;
+  }
+
+  ::selection {
+    background: var(--color-accent);
+    color: #000;
+  }
+
+  /* Thin dark scrollbars — a wide light scrollbar breaks the illusion. */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-line-hi) transparent;
+  }
+  *::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  *::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  *::-webkit-scrollbar-thumb {
+    background: var(--color-line-hi);
+  }
+  *::-webkit-scrollbar-thumb:hover {
+    background: var(--color-accent-dim);
+  }
+}
+
+/* ============================================================================
+   Components
+   ========================================================================= */
+
+@layer components {
+  /* Uppercase, letter-spaced, amber-dimmed. Used for every column header and
+     field label so labels never compete with data for attention. */
+  .label {
+    font-family: var(--font-ui);
+    font-size: var(--text-label);
+    font-weight: 500;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--color-accent-dim);
+  }
+
+  .label-ink {
+    color: var(--color-ink-faint);
+  }
+
+  /* One row of the grid. */
+  .row {
+    height: var(--spacing-row);
+  }
+
+  /* The <GO> keycap. Bloomberg's actual interaction model is TICKER <GO>, and
+     borrowing it gives the command bar an obvious affordance that also happens
+     to be authentic to the instrument this is imitating. */
+  .keycap {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 2.25rem;
+    height: 1.25rem;
+    padding: 0 0.375rem;
+    border: 1px solid var(--color-accent-dim);
+    background: var(--color-accent-wash);
+    color: var(--color-accent);
+    font-family: var(--font-mono);
+    font-size: var(--text-label);
+    font-weight: 600;
+    letter-spacing: 0.08em;
+  }
+
+  .keycap-active {
+    background: var(--color-accent);
+    color: #000;
+    border-color: var(--color-accent);
+  }
+}
+
+/* ============================================================================
+   Motion
+   The only animation in the app is the tick flash: when a price changes, its
+   cell briefly washes green or red. Real terminals do exactly this, and it
+   carries information rather than decorating.
+   ========================================================================= */
+
+@keyframes tick-gain {
+  from {
+    background-color: color-mix(in oklab, var(--color-gain) 24%, transparent);
+  }
+  to {
+    background-color: transparent;
+  }
+}
+
+@keyframes tick-loss {
+  from {
+    background-color: color-mix(in oklab, var(--color-loss) 24%, transparent);
+  }
+  to {
+    background-color: transparent;
+  }
+}
+
+@keyframes pulse-dot {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+.tick-gain {
+  animation: tick-gain 600ms ease-out;
+}
+.tick-loss {
+  animation: tick-loss 600ms ease-out;
+}
+.pulse-dot {
+  animation: pulse-dot 2.4s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tick-gain,
+  .tick-loss,
+  .pulse-dot {
+    animation: none;
+  }
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+  }
+}

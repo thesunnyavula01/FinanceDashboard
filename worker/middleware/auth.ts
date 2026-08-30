@@ -20,8 +20,8 @@ export type AuthedBindings = {
  * client could put anyone's id there.
  */
 export const requireAuth = createMiddleware<AuthedBindings>(async (c, next) => {
-  const secret = c.env.SUPABASE_JWT_SECRET;
-  if (!secret) {
+  const supabaseUrl = c.env.SUPABASE_URL;
+  if (!supabaseUrl) {
     return c.json({ error: "Auth is not configured on the server." }, 503);
   }
 
@@ -33,7 +33,10 @@ export const requireAuth = createMiddleware<AuthedBindings>(async (c, next) => {
 
   let claims: SessionClaims;
   try {
-    claims = await verifySessionToken(token, secret);
+    claims = await verifySessionToken(token, {
+      jwksUrl: `${supabaseUrl.replace(/\/+$/, "")}/auth/v1/.well-known/jwks.json`,
+      hmacSecret: c.env.SUPABASE_JWT_SECRET,
+    });
   } catch (err) {
     const message = err instanceof TokenError ? err.message : "Invalid session";
     return c.json({ error: message }, 401);

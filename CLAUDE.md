@@ -94,6 +94,27 @@ so switching to a paid feed later is a one-file change.
 
 ---
 
+## Auth
+
+Supabase signs session tokens with **ES256** on this project, not the legacy
+HS256 shared secret. The public keys are published at
+`/auth/v1/.well-known/jwks.json` and the token names its signer via `kid`.
+`worker/lib/jwt.ts` verifies against JWKS (cached 10 min, refetched on a kid
+miss) and still accepts HS256 if a project is ever migrated back. Pinning the
+algorithm from a known set is what blocks `alg: none` and algorithm confusion.
+Covered by `worker/lib/jwt.test.ts`.
+
+Signup is server-side only: the Worker checks the invite code, calls
+`createUser({ email_confirm: true })` so no mail is ever sent, then runs the
+`bootstrap_member()` RPC which creates the profile and the funded portfolio in
+one transaction. If that RPC fails the auth user is deleted, because a member
+who can sign in but has no portfolio is worse than no member. The first account
+ever created becomes admin, serialised by an advisory lock.
+
+The project has email confirmation **on** in the dashboard
+(`mailer_autoconfirm: false`) and it does not matter: that setting governs the
+public signup endpoint, which this app never calls.
+
 ## Domain model
 
 ### Signed quantity
@@ -201,6 +222,7 @@ npm run dev        vite dev; the Cloudflare plugin runs the Worker inside
 npm run build      typecheck + bundle -> dist/client and dist/<worker-name>
 npm run deploy     build + wrangler deploy
 npm run typecheck  tsc across the app, worker, and node configs
+npm test           node --test over worker/**/*.test.ts
 ```
 
 **Windows prerequisite:** `workerd` is a native binary that needs the Microsoft
@@ -212,7 +234,7 @@ step 6. Build and deploy are unaffected.
 
 - [x] **Phase 0** - repo hygiene, env scaffolding, credential checklist (`SETUP.md`)
 - [x] **Phase 1** - scaffold + terminal design system
-- [ ] **Phase 2** - auth (invite-code signup, protected routes)
+- [x] **Phase 2** - auth (invite-code signup, protected routes)
 - [ ] **Phase 3** - market data layer (Alpaca proxy, KV cache, sector enrichment)
 - [ ] **Phase 4** - trading engine (`place_order()` RPC, order ticket, blotter)
 - [ ] **Phase 5** - analytics (positions grid, sectors, equity curve vs benchmarks)

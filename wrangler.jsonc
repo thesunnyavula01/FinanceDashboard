@@ -24,8 +24,14 @@
     "run_worker_first": ["/api/*"]
   },
 
-  // Shared quote cache. One entry per symbol, ~20s TTL, so 100 members hitting
-  // the dashboard at once still trigger only a couple of upstream fetches.
+  // Holds the nightly copy of Alpaca's tradable asset list, sharded by first
+  // letter, so ticker autocomplete is a small local read.
+  //
+  // Despite the binding name, quotes are NOT cached here: a 20s TTL would be
+  // ~234,000 writes a day against a 1,000/day free-tier ceiling, and KV has a
+  // 60-second floor on expirationTtl. Prices use isolate memory plus the Cache
+  // API — see worker/market/quotes.ts.
+  //
   // Create with: npx wrangler kv namespace create QUOTES
   // then paste the returned id below.
   "kv_namespaces": [
@@ -35,11 +41,34 @@
     }
   ],
 
-  // Nightly portfolio + benchmark snapshots. 21:30 UTC is after the US close
-  // year-round (5:30pm ET in summer, 4:30pm ET in winter). The handler checks
-  // whether the market actually traded before writing anything.
   "triggers": {
-    "crons": ["30 21 * * 1-5"]
+    "crons": [
+      // The resting-order sweep: fills orders queued while the market was shut,
+      // and expires day orders at the close. Every minute from 13:00 to 21:59
+      // UTC on weekdays, which brackets 09:30-16:00 ET in both EDT (UTC-4) and
+      // EST (UTC-5) without needing to know which is in force. The sweep itself
+      // reads the exchange calendar and does nothing unless the market is
+      // genuinely open, so the extra ticks around the edges — and on holidays —
+      // cost one cached clock lookup each.
+      //
+      // No weekend entry, deliberately. There is no session to fill into: a
+      // queue built on Sunday comes to life at Monday's open.
+      "* 13-21 * * 1-5",
+
+      // The nightly tick: refresh the tradable universe, then snapshot every
+      // portfolio and the two benchmarks.
+      //
+      // 22:15 UTC is 18:15 ET in summer and 17:15 ET in winter — still the same
+      // exchange date, which is what the snapshot is stamped with, but far
+      // enough past the 16:00 close that the daily bars it prices the club at
+      // have certainly been published. In winter the close is 21:00 UTC, so an
+      // earlier slot would leave only minutes of margin. It also sits outside
+      // the sweep's 13:00-21:59 window, so the two jobs never share a minute.
+      //
+      // The handler gates itself on whether the exchange actually held a
+      // session, so a holiday costs one bar request and writes nothing.
+      "15 22 * * 1-5"
+    ]
   },
 
   "vars": {

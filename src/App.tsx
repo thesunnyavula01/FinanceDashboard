@@ -59,7 +59,7 @@ export function App() {
         onSignOut={signOut}
       />
 
-      <FunctionNav />
+      <FunctionNav isAdmin={me?.role === "admin"} />
 
       <main className="min-h-0 flex-1 overflow-auto">
         <Routes>
@@ -72,7 +72,7 @@ export function App() {
         </Routes>
       </main>
 
-      <CommandBar />
+      <CommandBar isAdmin={me?.role === "admin"} />
     </div>
   );
 }

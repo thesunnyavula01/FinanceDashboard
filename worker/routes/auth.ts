@@ -1,19 +1,10 @@
 import { Hono } from "hono";
-import type { Env } from "../types";
-import { ConfigError, serviceClient } from "../lib/supabase";
-import { requireAuth, type AuthedBindings } from "../middleware/auth";
+import type { Env } from "../types.ts";
+import { ConfigError, serviceClient } from "../lib/supabase.ts";
+import { inviteCode, secretEquals } from "../lib/club.ts";
+import { requireAuth, type AuthedBindings } from "../middleware/auth.ts";
 
 export const auth = new Hono<{ Bindings: Env }>();
-
-/** Comparison that does not reveal how much of the code was correct. */
-function secretEquals(a: string, b: string): boolean {
-  const ab = new TextEncoder().encode(a);
-  const bb = new TextEncoder().encode(b);
-  if (ab.length !== bb.length) return false;
-  let diff = 0;
-  for (let i = 0; i < ab.length; i++) diff |= ab[i]! ^ bb[i]!;
-  return diff === 0;
-}
 
 interface SignupBody {
   email?: unknown;
@@ -32,11 +23,6 @@ interface SignupBody {
  * who can log in but has no portfolio.
  */
 auth.post("/signup", async (c) => {
-  const expectedCode = c.env.CLUB_INVITE_CODE;
-  if (!expectedCode) {
-    return c.json({ error: "Signup is not configured on the server." }, 503);
-  }
-
   let body: SignupBody;
   try {
     body = await c.req.json<SignupBody>();
@@ -47,7 +33,7 @@ auth.post("/signup", async (c) => {
   const email = typeof body.email === "string" ? body.email.trim().toLowerCase() : "";
   const password = typeof body.password === "string" ? body.password : "";
   const displayName = typeof body.displayName === "string" ? body.displayName.trim() : "";
-  const inviteCode = typeof body.inviteCode === "string" ? body.inviteCode.trim() : "";
+  const offered = typeof body.inviteCode === "string" ? body.inviteCode.trim() : "";
 
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
     return c.json({ error: "Enter a valid email address." }, 400);
@@ -58,9 +44,6 @@ auth.post("/signup", async (c) => {
   if (displayName.length < 1 || displayName.length > 40) {
     return c.json({ error: "Display name must be 1 to 40 characters." }, 400);
   }
-  if (!secretEquals(inviteCode, expectedCode)) {
-    return c.json({ error: "That invite code is not valid. Ask a club officer." }, 403);
-  }
 
   let supabase;
   try {
@@ -68,6 +51,16 @@ auth.post("/signup", async (c) => {
   } catch (err) {
     if (err instanceof ConfigError) return c.json({ error: err.message }, 503);
     throw err;
+  }
+
+  // The current code, which an officer can rotate from the admin console. The
+  // env var is only the seed — see worker/lib/club.ts.
+  const expected = await inviteCode(c.env, supabase);
+  if (!expected.code) {
+    return c.json({ error: "Signup is not configured on the server." }, 503);
+  }
+  if (!secretEquals(offered, expected.code)) {
+    return c.json({ error: "That invite code is not valid. Ask a club officer." }, 403);
   }
 
   // email_confirm: true marks the address confirmed without sending mail, which

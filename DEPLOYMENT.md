@@ -1,5 +1,47 @@
 # Deploying to Cloudflare
 
+## Migrations: all five are applied
+
+`0001` through `0005` are in the FinanceClub project (ref `vtlqkgpcfdhslqahivzf`)
+and were verified against the catalogue on 2026-08-30. Phase 7 added none. **You
+do not owe the database anything before deploying.**
+
+There is no migration runner in this project — migrations are pasted into the
+Supabase SQL editor by hand — so if you ever need to confirm the state rather
+than trust this file, run the check below. Do that rather than trusting
+"Success. No rows returned", which is also what a script you did not mean to run
+says:
+
+```sql
+select 'starting_cash'    as item, count(*)::text as found from information_schema.columns
+  where table_schema='public' and table_name='portfolios' and column_name='starting_cash'
+union all
+select 'club_settings', count(*)::text from information_schema.tables
+  where table_schema='public' and table_name='club_settings'
+union all
+select 'admin fns (of 7)', count(distinct proname)::text from pg_proc p
+  join pg_namespace n on n.oid = p.pronamespace
+  where n.nspname='public' and proname in ('create_season','update_season','reset_season',
+        'set_member_role','rebuild_portfolio','void_trade','amend_trade')
+union all
+select 'anon/authenticated can execute them (want 0)', count(*)::text from pg_proc p
+  join pg_namespace n on n.oid = p.pronamespace
+  where n.nspname='public' and p.proname in ('create_season','update_season','reset_season',
+        'set_member_role','rebuild_portfolio','void_trade','amend_trade')
+    and (has_function_privilege('anon', p.oid, 'EXECUTE')
+      or has_function_privilege('authenticated', p.oid, 'EXECUTE'));
+```
+
+Expect `1, 1, 7, 0`. The last row is non-negotiable rule 2 holding at the
+database level: only `service_role` may call the functions that move money.
+
+> Two things that bite in the SQL editor. It runs **whichever tab has focus**,
+> not the one you were last looking at, so read the editor before pressing Run —
+> the editor restores previous sessions' tabs and one of them may hold something
+> else entirely. And a migration whose *function bodies* contain `delete from`
+> trips the "destructive operations" warning even though creating a function
+> that contains a DELETE does not run it; `0003` and `0005` both do this.
+
 ## Before you deploy: create the KV namespace
 
 `wrangler.jsonc` ships with a placeholder KV id, and **`wrangler deploy` will
@@ -10,11 +52,28 @@ npx wrangler kv namespace create QUOTES
 ```
 
 Paste the returned `id` over `PLACEHOLDER_RUN_WRANGLER_KV_NAMESPACE_CREATE_QUOTES`
-in `wrangler.jsonc`. That namespace is the shared quote cache — it is what keeps
-100 members refreshing every 20 seconds inside the free API rate limit.
+in `wrangler.jsonc`. The namespace holds the nightly copy of Alpaca's tradable
+asset list, which is what makes ticker autocomplete a local read instead of a
+multi-megabyte download per keystroke.
 
-The app builds and the SPA renders without it; only the Worker needs it, from
-Phase 3 onward.
+> The binding is still named `QUOTES` for historical reasons; quotes themselves
+> are **not** cached in KV. A 20-second quote cache would be roughly 234,000
+> writes a day against a 1,000/day free-tier ceiling, and KV cannot express a
+> TTL below 60 seconds anyway. Prices are cached in isolate memory and the Cache
+> API instead — see the comment at the top of `worker/market/quotes.ts`.
+
+The app builds and the SPA renders without the namespace; only the Worker needs
+it, from Phase 3 onward.
+
+After the first deploy, populate the asset list without waiting for the cron:
+
+```
+curl -X POST https://<your-worker>/api/market/universe/sync \
+  -H "Authorization: Bearer <an admin's session token>"
+```
+
+Or just use the app — the first ticker search kicks off a sync behind the
+response, and the one after it returns results.
 
 ---
 
@@ -142,6 +201,58 @@ pushes to deploy automatically.
 
 ---
 
+## The Cron Triggers
+
+`wrangler.jsonc` declares two schedules, and `wrangler deploy` registers them.
+They appear under **Settings → Trigger Events** in the dashboard; if that list
+is empty after a deploy, nothing scheduled is running.
+
+| Schedule (UTC) | Job |
+|---|---|
+| `* 13-21 * * 1-5` | Fill resting orders, expire DAY orders. Gates itself on the exchange calendar, so holidays cost one cached clock lookup |
+| `15 22 * * 1-5` | Refresh the tradable universe, then snapshot every portfolio and the two benchmarks |
+
+22:15 UTC is 18:15 ET in summer and 17:15 ET in winter — past the close in both,
+with enough margin that the daily bars the snapshot prices the club at have
+certainly been published, and still the same exchange date the rows are stamped
+with.
+
+The cron expressions are duplicated in `worker/index.ts`, which dispatches on
+them. `worker/schedule.test.ts` fails the build if the two files drift, because
+the failure is otherwise silent: the trigger fires, no branch matches, and the
+job quietly stops running.
+
+### Verifying the snapshot without waiting for 22:15
+
+Both jobs have a forced-run endpoint behind `requireAdmin`, and both are
+idempotent, so pressing them is safe:
+
+```
+curl -X POST https://<your-worker>/api/portfolio/snapshot \
+  -H "Authorization: Bearer <an admin's session token>"
+```
+
+It answers with what it did:
+
+```json
+{ "ran": true, "asOf": "2026-08-31", "portfolios": 12, "benchmarks": 20, "unpriced": 0 }
+```
+
+`"ran": false` with a `reason` is the ordinary answer on a weekend or a holiday
+— the job gates on whether SPY has a bar dated today, so there is nothing to
+record. Run it again and confirm `portfolios` reports the same count and the
+row count in the table has not moved: the writes upsert on
+`(portfolio_id, as_of)`, so a second run overwrites rather than duplicates.
+
+```sql
+select as_of, count(*) from portfolio_snapshots group by as_of order by as_of desc;
+```
+
+To exercise the handler locally, `wrangler dev --test-scheduled` exposes
+`http://localhost:8787/__scheduled?cron=15+22+*+*+1-5`.
+
+---
+
 ## Post-deploy checklist
 
 - [ ] Sign up with the invite code; confirm a wrong code is rejected
@@ -149,6 +260,11 @@ pushes to deploy automatically.
 - [ ] Short a position; confirm buying power drops by ~50% of notional
 - [ ] Open DevTools → Network and confirm **no** Alpaca, Finnhub, or
       service-role key appears in any request or in the JS bundle
-- [ ] Place an order while the market is closed; confirm rejection with the
-      next-open time
-- [ ] Confirm the nightly Cron Trigger writes snapshot rows
+- [ ] Place an order while the market is closed; confirm it is *queued*, not
+      refused, and appears under working orders
+- [ ] Fire two orders at once from two tabs; confirm the cash math is right
+- [ ] Settings → Trigger Events lists both cron schedules
+- [ ] `POST /api/portfolio/snapshot` writes rows; run it twice and confirm the
+      row count does not move
+- [ ] Rotate the invite code from the admin console and confirm the old one
+      stops working immediately

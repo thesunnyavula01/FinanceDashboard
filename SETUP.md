@@ -91,6 +91,12 @@ Open `.dev.vars` and change `CLUB_INVITE_CODE` from `CHANGE-ME-BEFORE-LAUNCH` to
 whatever you'll hand out at the first meeting, e.g. `BULLS-2026`. Anyone with the
 site URL **and** this code can create an account; anyone without it cannot.
 
+This one is a *seed*, not the permanent code. It is what signup accepts until an
+officer sets a code from the admin console (F5) — which is how you rotate it
+when it inevitably reaches a group chat, without a deploy. Once a code has been
+set there, the one in `.dev.vars` stops working; a seed that kept opening the
+door would make rotation meaningless.
+
 ---
 
 ## 6. Windows: install the Visual C++ runtime

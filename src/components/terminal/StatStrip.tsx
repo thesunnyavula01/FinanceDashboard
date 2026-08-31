@@ -5,7 +5,11 @@ export interface Stat {
   value: ReactNode;
   /** Smaller secondary line under the value, e.g. a percentage next to a dollar figure. */
   sub?: ReactNode;
-  /** Renders the value at hero size. Reserved for NAV — exactly one per strip. */
+  /**
+   * Renders the value at hero size: the one figure the screen exists to answer.
+   * Exactly one per strip — NAV on the portfolio screens, rank on the
+   * leaderboard. A second hero is two headlines and therefore none.
+   */
   hero?: boolean;
 }
 

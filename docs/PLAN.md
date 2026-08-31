@@ -231,6 +231,21 @@ Sides: `BUY`, `SELL`, `SHORT`, `COVER`. Order entry accepts either a share count
 - Backfill SPY/QQQ history from Alpaca daily bars when a season is created.
 - `wrangler secret put` for each secret, deploy, smoke-test signup → trade → dashboard in production.
 
+**Built** (`worker/analytics/snapshot.ts`), with three changes to the above:
+
+- The cron runs at **22:15 UTC**, not 21:30. In winter the close is 21:00 UTC, so 21:30 leaves half an
+  hour for Alpaca to publish the daily bars the job prices the club at; 22:15 is still the same
+  exchange date and sits outside the sweep's 13:00–21:59 window.
+- Prices come from **daily bar closes, not the quote cache**. After the bell `latestTrade` is a thin
+  after-hours IEX print, and the curve merges snapshots into a replay valued at bar closes — a
+  snapshot priced any other way would put a step in the chart.
+- **No backfill of missed nights.** `mergeSnapshots()` prefers a snapshot to a replay because it was
+  computed at the close; a reconstructed snapshot would silently retire that. The replay already
+  covers the gap.
+
+`POST /api/portfolio/snapshot` runs the job on demand for officers, which is how verification step 7
+is carried out. No migration was needed — both tables have existed since `0001_init.sql`.
+
 ---
 
 ## Critical files

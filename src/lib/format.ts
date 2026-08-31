@@ -103,3 +103,22 @@ export function duration(totalSeconds: number): string {
   const sec = s % 60;
   return [h, m, sec].map((v) => String(v).padStart(2, "0")).join(":");
 }
+
+const stampFormat = new Intl.DateTimeFormat("en-US", {
+  timeZone: "America/New_York",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  hour12: false,
+});
+
+/**
+ * A fill's timestamp: "03/14 09:31". Used in the blotter, where a season's
+ * worth of trades needs a date but the year is never in question.
+ */
+export function stampET(value: string | Date): string {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return "—";
+  return stampFormat.format(date).replace(",", "");
+}

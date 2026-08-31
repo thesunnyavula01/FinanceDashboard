@@ -1,12 +1,15 @@
 /**
- * Market session estimate.
+ * Market session estimate — the fallback, not the answer.
  *
- * TEMPORARY. This reads New York wall-clock time and knows nothing about
- * holidays or half-days, so it will happily report OPEN on Thanksgiving.
+ * Phase 3 made Alpaca's exchange calendar the real clock (see clock.ts). This
+ * remains as the degraded path for when Alpaca is unreachable or its keys are
+ * not configured, because a dashboard that shows nothing is worse than one
+ * that shows a labelled guess.
  *
- * Phase 3 replaces it with Alpaca's /v2/clock, which is authoritative and free.
- * Until then every response carries `authoritative: false` so the UI can label
- * the estimate honestly rather than quietly showing a wrong answer.
+ * It reads New York wall-clock time and knows nothing about holidays or
+ * half-days, so it will happily report OPEN on Thanksgiving. Every response
+ * carries `authoritative: false` for exactly that reason: the UI marks it as
+ * an estimate, and Phase 4 refuses to execute orders against it.
  */
 
 export type SessionState = "OPEN" | "CLOSED" | "PRE" | "POST";

@@ -13,7 +13,10 @@ interface StatusRailProps {
   appName: string;
   session: SessionState;
   sessionLabel: string;
-  /** False until Phase 3 replaces the estimate with Alpaca's real market clock. */
+  /**
+   * False when Alpaca's exchange calendar could not be reached and the state
+   * is a guess from New York clock hours.
+   */
   authoritative: boolean;
   connected: boolean;
   displayName?: string;
@@ -72,7 +75,7 @@ export function StatusRail({
               className="label label-ink"
               // Not "(est)": sitting beside an ET clock, that reads as a
               // timezone rather than as "this status is a guess".
-              title="Estimated from New York trading hours; does not know holidays. The real market clock arrives in Phase 3."
+              title="The exchange calendar is unreachable, so this is estimated from New York trading hours and does not know about holidays."
             >
               Estimated
             </span>

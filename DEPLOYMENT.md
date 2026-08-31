@@ -42,19 +42,46 @@ database level: only `service_role` may call the functions that move money.
 > trips the "destructive operations" warning even though creating a function
 > that contains a DELETE does not run it; `0003` and `0005` both do this.
 
-## Before you deploy: create the KV namespace
+## The KV namespace — created
 
-`wrangler.jsonc` ships with a placeholder KV id, and **`wrangler deploy` will
-fail until it is replaced.** Create the namespace once:
+Namespace `financedashboard-QUOTES`, id `6d645b694a1b4555b0ea3ed17d1880ce`,
+already wired into `wrangler.jsonc`. It holds the nightly copy of Alpaca's
+tradable asset list, which is what makes ticker autocomplete a local read
+instead of a multi-megabyte download per keystroke.
+
+Until that id was real, every deploy died at the deploy step — after a
+completely successful build — with:
+
+```
+✘ [ERROR] KV namespace 'PLACEHOLDER_...' is not valid. [code: 10042]
+```
+
+If the namespace is ever deleted, recreate it and paste the new id in:
 
 ```
 npx wrangler kv namespace create QUOTES
 ```
 
-Paste the returned `id` over `PLACEHOLDER_RUN_WRANGLER_KV_NAMESPACE_CREATE_QUOTES`
-in `wrangler.jsonc`. The namespace holds the nightly copy of Alpaca's tradable
-asset list, which is what makes ticker autocomplete a local read instead of a
-multi-megabyte download per keystroke.
+The id is not a secret. It names a namespace; reaching it still needs the
+account's credentials, so it belongs in the config rather than the secret store.
+
+## The Worker is named `financedashboard`
+
+Workers Builds derives the service name from the repository, so the dashboard
+created `financedashboard` while `wrangler.jsonc` said `finance-club-terminal`.
+The config now matches the dashboard.
+
+Do not let them drift again:
+
+```
+▲ [WARNING] Failed to match Worker name. Your config file is using
+  "finance-club-terminal", but the CI system expected "financedashboard".
+```
+
+CI overrides and carries on, so this is only a warning — but **`wrangler secret
+put` run locally reads the name from the config**, so under a mismatch your
+secrets go to a Worker that is not the one serving traffic, and nothing tells
+you. Pass `--name financedashboard` whenever you are unsure.
 
 > The binding is still named `QUOTES` for historical reasons; quotes themselves
 > are **not** cached in KV. A 20-second quote cache would be roughly 234,000

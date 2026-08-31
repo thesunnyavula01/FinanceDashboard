@@ -1,6 +1,11 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "finance-club-terminal",
+  // Must match the Worker in the Cloudflare dashboard. Workers Builds derives
+  // the service name from the repository, so this is "financedashboard" rather
+  // than the project's own name: a mismatch makes every CI deploy print
+  // "Failed to match Worker name", override this value, and offer to open a
+  // pull request correcting it.
+  "name": "financedashboard",
   "main": "./worker/index.ts",
   "compatibility_date": "2026-08-30",
   "compatibility_flags": ["nodejs_compat"],
@@ -32,12 +37,13 @@
   // 60-second floor on expirationTtl. Prices use isolate memory plus the Cache
   // API — see worker/market/quotes.ts.
   //
-  // Create with: npx wrangler kv namespace create QUOTES
-  // then paste the returned id below.
+  // Namespace "financedashboard-QUOTES", created 2026-08-30. The id is not a
+  // secret — it names a namespace, and reaching it still requires the account's
+  // credentials — so it belongs in the config rather than in the secret store.
   "kv_namespaces": [
     {
       "binding": "QUOTES",
-      "id": "PLACEHOLDER_RUN_WRANGLER_KV_NAMESPACE_CREATE_QUOTES"
+      "id": "6d645b694a1b4555b0ea3ed17d1880ce"
     }
   ],
 

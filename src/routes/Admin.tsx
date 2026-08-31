@@ -218,10 +218,17 @@ function SeasonPanel({ season }: { season: ReturnType<typeof useAdminOverview>["
         />
 
         <div className="flex flex-wrap items-center gap-1.5">
+          {/*
+            `changed` alone is not enough to enable Save. Clearing the field
+            makes Number("") === 0, and a stray second dot makes Number("1.2.3")
+            NaN — both compare unequal to the current figure, so the button
+            would light up and post a value the database is about to refuse.
+            Same guard the Start Season button below already uses.
+          */}
           <ActionButton
             tone="accent"
             onClick={save}
-            disabled={!changed}
+            disabled={!changed || name.trim().length === 0 || !(Number(cash) > 0)}
             pending={update.isPending}
           >
             Save

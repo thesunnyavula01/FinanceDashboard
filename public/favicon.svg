@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <!-- The money bag, U+1F4B0, as a numeric reference so this file stays
+       pure-ASCII and cannot be mangled by an editor guessing at encodings.
+       Rendered by the viewer's own emoji font, so there is no bitmap to ship. -->
+  <text x="50" y="50" font-size="88" text-anchor="middle" dominant-baseline="central">&#128176;</text>
+</svg>

@@ -71,11 +71,17 @@ scraper. Do not go down that road.
   `latestQuote`, `minuteBar`, `dailyBar`, `prevDailyBar` per symbol.
 - `GET data.alpaca.markets/v2/stocks/bars?symbols=SPY,QQQ&timeframe=1Day&start=...`
   Free historical daily bars. Powers the benchmark curves.
+- The same endpoint at `timeframe=5Min` powers the 1D chart. Batched and paged
+  identically. Unlike the daily bars these are **IEX only, not the consolidated
+  tape**, so a thin name simply has no bar in plenty of five-minute buckets —
+  fine for drawing the shape of a day, and never touched by anything that
+  settles money.
 - `GET paper-api.alpaca.markets/v2/clock` - market open/closed + next open/close.
   Drives the market-hours-only rule. Paired with
   `/v2/calendar?start=<today>&end=<today>`, which is what separates "closed
   because the session ended" from "closed because today is Thanksgiving" and
-  gives the real close time on a half day. Both free.
+  gives the real close time on a half day. Both free. The 1D chart reads the
+  same calendar over a range, to bound its axis to the session that was held.
 - `GET paper-api.alpaca.markets/v2/assets?status=active&asset_class=us_equity`
   The tradable universe, for ticker validation and autocomplete. ~13,000 listed
   rows after filtering OTC out.
@@ -450,12 +456,27 @@ drawn on a Saturday ends on Friday, because that is when the account last had a
 value that meant anything — and when it is, its final point is overwritten with
 a live mark from the quote cache rather than a partial bar.
 
-**Everything is indexed to 100 at the start of the visible range**, not at the
-season start. A member switching to 1W is asking how this week went against the
-market; a chart still measuring from January answers a different question. The
-panel states which date is the 100, because a normalised chart with an unstated
-baseline cannot be checked. Ranges are clamped to the season start, so a club
-that began in March has no "YTD" before March.
+**Everything is in dollars, on the member's own scale.** The account is drawn as
+it is, and SPY, QQQ and the club average are each drawn as what the *same money*
+would have been worth had it gone there instead — `scaleTo()` rescales the line
+without reshaping it, so a benchmark's percentage move on this chart is the same
+number the leaderboard prints. That is the comparison a member can act on: not
+"how did the index do" but "would I have been better off in the index", and in
+dollars the answer is the vertical gap, readable by looking.
+
+An index axis reading 98 / 100 / 104 was the earlier answer and it was a worse
+one. It made the member do arithmetic to find out what they own, and it put the
+one figure they came to the screen for — the money — nowhere on the chart.
+
+**The baseline is the range start, not the season start.** A member switching to
+1W is asking how this week went against the market; a chart still measuring from
+January answers a different question. The panel states which date the lines
+start from, because a rescaled chart with an unstated baseline cannot be
+checked. Ranges are clamped to the season start, so a club that began in March
+has no year behind it. There is no YTD tab: for a season that starts in the
+autumn it is a second, worse spelling of ALL for most of the year, and `1Y` is
+the tab a member actually reaches for. `parseRange()` still answers a stale
+`?range=YTD` with ALL rather than a 500.
 
 Unlike `/api/portfolio`, this endpoint *is* priced, and that is not a
 contradiction of the split described above. The positions grid re-values on the
@@ -463,7 +484,61 @@ contradiction of the split described above. The positions grid re-values on the
 day's worth of history that changes once a session, so it is assembled
 server-side where the bars are already cached and the club average is one
 aggregate rather than 25,000 rows over the wire. The client polls it every five
-minutes.
+minutes — every minute on 1D, which is the one range whose newest point is
+still being written.
+
+### 1D is a different chart behind the same URL
+
+Every other range is one point per session. 1D is one session at five-minute
+resolution, and `buildHistory()` routes it to a separate builder that shares the
+blotter, the snapshots and the shape of the answer with the session path, and
+nothing else. Three things carry it:
+
+**The session is discovered, not calculated.** Whichever session SPY last
+printed intraday bars for is the session drawn. That is a weekend, a holiday, a
+half day and a member opening the terminal at 7am all handled by one line of
+code, with no calendar existing anywhere — the same trick the session axis plays
+one resolution up. Before the opening bell the chart shows yesterday, which is
+what every broker does and what a member means by "how did we do". The panel
+names the session, because nothing else on screen would say so.
+
+**The baseline is the previous close, not the open.** A day's change is measured
+from where the account finished yesterday, so it can be down on the day while up
+since the bell. That is the same number the positions grid prints as day P/L,
+and the two must not disagree. The benchmarks are anchored the same way — on
+their previous close rather than their first print — because on most days the
+overnight gap is most of the move, and anchoring on the open would hide it.
+A stored snapshot for the previous session wins over the replay for the baseline,
+for the same reason it wins on the session chart.
+
+**The axis is regular hours, and the calendar says where those are.** Alpaca's
+five-minute bars run the full 04:00-20:00 extended day. Drawing them would
+stretch a six-and-a-half-hour chart to sixteen and give its most prominent moves
+to the thinnest prints of the day — and it would make this the one screen
+treating pre-market as open, when `quoteFromSnapshot` ignores extended prints and
+an order placed then is refused. So the buckets are filtered to the session the
+exchange actually held, taken from `/v2/calendar` (cached an hour, since every
+row but today's is settled history). That is also what ends the line at 13:00 on
+the Friday after Thanksgiving rather than drawing three flat hours past the
+close. Calendar unreachable falls back to 09:30-16:00: right on every day of the
+year but those three.
+
+**The club average has no intraday line**, because it is a nightly aggregate over
+`portfolio_snapshots`. It is dimmed in the legend with the reason on hover
+rather than dropped, since a legend that loses an entry between two range tabs
+reads as a bug.
+
+The right edge of every line is one instant: the account's last point takes a
+live mark from the quote cache, and so do SPY and QQQ, because otherwise the
+gap between the lines — the one thing the chart exists to show — would drift
+every time a bar rolled over. `worker/market/intraday.ts` caches the bars in the
+same two tiers as quotes and daily bars, for 60 seconds, keyed **per symbol** —
+which is the whole reason a hundred members polling a 1D chart every minute is
+two or three upstream requests rather than a hundred.
+
+`intraday.test.ts` pins the part with the silent failure modes: a chart that
+quietly draws Friday on a Tuesday looks exactly like one that draws Tuesday, and
+so does one anchored on this morning's open instead of last night's close.
 
 ### The nightly snapshot writes closes, not quotes
 
@@ -635,9 +710,10 @@ before writing any chart code. (`dataviz` is not installed on this machine —
 chart looking like a different application. Amber is the interface and never a
 number, so on the equity curve it marks the line that is *you* — identity, not
 performance. Benchmarks are greys, because they are the ruler. Green and red
-mean gain and loss and nothing else, which on that screen is the excess-return
-strip and the sector bars' short side. No gradients, no fills, no animated
-line draws: the tick flash is still the only motion in the app.
+mean gain and loss and nothing else, which on that screen is the change figure
+in the panel header, the excess-return strip, and the sector bars' short side —
+never the account line itself, however the day went. No gradients, no fills, no
+animated line draws: the tick flash is still the only motion in the app.
 
 ---
 
@@ -650,14 +726,15 @@ worker/market/alpaca.ts         snapshots, bars, clock, assets
 worker/market/finnhub.ts        profile2 -> sector
 worker/market/sectors.ts        finnhubIndustry -> GICS-11 map, ETF bucket
 worker/market/quotes.ts         three-tier quote cache + symbol validation
-worker/market/clock.ts          cached market clock, falls back to session.ts
+worker/market/clock.ts          cached market clock + calendar, falls back to session.ts
 worker/market/session.ts        wall-clock session estimate (fallback only)
 worker/market/universe.ts       nightly asset list in KV, sharded for autocomplete
 worker/market/securities.ts     sector enrichment, persisted to `securities`
 worker/market/bars.ts           cached daily bars, two tiers, for the curve
+worker/market/intraday.ts       cached 5-minute bars, two tiers, for the 1D chart
 worker/orders/engine.ts         order rules in TypeScript: pre-flight + tests
 worker/orders/sweep.ts          fills resting orders; cron-driven, calendar-gated
-worker/analytics/curve.ts       equity-curve arithmetic: replay, align, index
+worker/analytics/curve.ts       curve arithmetic: replay a season, replay a day, scale
 worker/analytics/history.ts     assembles the curve from trades, bars, snapshots
 worker/analytics/snapshot.ts    nightly portfolio + benchmark rows; cron-driven
 worker/lib/portfolio.ts         active season + portfolio + positions, read side
@@ -670,7 +747,7 @@ src/lib/                        supabase client, API client, formatters, valuati
 src/lib/sectors.ts              positions -> gross sector exposure, client-side
 src/hooks/useQuotes.ts          TanStack Query, 20s refetchInterval
 src/hooks/usePortfolio.ts       holdings + blotter + the place-order mutation
-src/hooks/useHistory.ts         the equity curve, 5-minute poll, range in state
+src/hooks/useHistory.ts         the equity curve, 5-minute poll (60s on 1D), range in state
 src/hooks/useLeaderboard.ts     the standings, 30s poll, plus one member's book
 src/hooks/useAdmin.ts           the console's one read and every officer mutation
 src/components/terminal/        Panel, DataGrid, StatStrip, OrderTicket, Blotter,
@@ -709,7 +786,8 @@ GET  /api/market/securities?symbols=  names and sectors
 GET  /api/market/universe             asset-list size and last sync
 POST /api/market/universe/sync        force a resync (admin only)
 GET  /api/portfolio                   cash, positions, season. Deliberately unpriced
-GET  /api/portfolio/history?range=    equity curve vs SPY, QQQ, club. Priced — see below
+GET  /api/portfolio/history?range=    equity curve vs SPY, QQQ, club, in dollars.
+                                      1D is one session at 5-minute resolution
 POST /api/portfolio/snapshot          run tonight's snapshot now (admin only)
 POST /api/orders                      place an order. No price field — see rule 3
 GET  /api/orders                      trade blotter, newest first

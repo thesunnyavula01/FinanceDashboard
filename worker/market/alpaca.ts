@@ -3,7 +3,10 @@ import {
   MarketDataError,
   exchangeDate,
   type BarQuery,
+  type CalendarDay,
   type DailyBar,
+  type IntradayBar,
+  type IntradayQuery,
   type MarketClock,
   type PriceProvider,
   type Quote,
@@ -354,6 +357,70 @@ export class AlpacaProvider implements PriceProvider {
   }
 
   /**
+   * Bars inside a session, for the 1D chart.
+   *
+   * The same endpoint as `dailyBars` with a finer timeframe, and the same
+   * paging, so a club whose members hold sixty symbols between them is still a
+   * single request per hundred.
+   *
+   * Two free-tier facts shape the caller rather than this method. Intraday
+   * bars come from the IEX feed, which is a slice of the tape rather than the
+   * whole of it, so a thin name simply has no bar in some five-minute buckets —
+   * the replay carries the last print forward instead of reading the gap as a
+   * price. And unlike the daily bars, these are *not* the consolidated tape, so
+   * they are right for drawing the shape of a day and wrong for anything that
+   * settles money. Nothing in the order path touches them.
+   */
+  async intradayBars(
+    symbols: string[],
+    query: IntradayQuery,
+  ): Promise<Map<string, IntradayBar[]>> {
+    const out = new Map<string, IntradayBar[]>();
+    if (symbols.length === 0) return out;
+
+    for (const batch of chunk(symbols, SYMBOLS_PER_REQUEST)) {
+      let pageToken: string | null = null;
+      let page = 0;
+
+      do {
+        const params = new URLSearchParams({
+          symbols: batch.join(","),
+          timeframe: query.timeframe,
+          start: query.start,
+          adjustment: "all",
+          feed: this.#config.feed,
+          limit: String(Math.min(query.limit ?? 10_000, 10_000)),
+        });
+        if (query.end) params.set("end", query.end);
+        if (pageToken) params.set("page_token", pageToken);
+
+        const body: { bars?: Record<string, AlpacaBar[]>; next_page_token?: string | null } =
+          await this.#get(`${DATA_HOST}/v2/stocks/bars?${params}`);
+
+        for (const [symbol, bars] of Object.entries(body.bars ?? {})) {
+          const mapped = bars.map((bar) => ({
+            at: bar.t,
+            date: exchangeDate(bar.t),
+            open: bar.o,
+            high: bar.h,
+            low: bar.l,
+            close: bar.c,
+            volume: bar.v,
+          }));
+          const existing = out.get(symbol);
+          if (existing) existing.push(...mapped);
+          else out.set(symbol, mapped);
+        }
+
+        pageToken = body.next_page_token ?? null;
+        page += 1;
+      } while (pageToken && page < MAX_BAR_PAGES);
+    }
+
+    return out;
+  }
+
+  /**
    * Open or closed, straight from the exchange calendar.
    *
    * Alpaca's /v2/clock answers only for regular hours, so the calendar row for
@@ -385,6 +452,35 @@ export class AlpacaProvider implements PriceProvider {
       nextClose: clock.next_close ?? null,
       authoritative: true,
     };
+  }
+
+  /**
+   * The exchange calendar over a date range.
+   *
+   * `clock()` already reads one row of this to tell a holiday from an evening.
+   * The 1D chart needs several, because it draws whichever session last
+   * happened and that may be days ago — and it needs the hours, because a bar
+   * feed does not distinguish 09:35 from 06:35 and this app has never counted
+   * pre-market as the market being open.
+   *
+   * A day the exchange did not open is absent from the result rather than
+   * present with zero hours, so "was there a session" and "when did it end" are
+   * the same lookup.
+   */
+  async calendar(start: string, end: string): Promise<CalendarDay[]> {
+    const days = await this.#get<AlpacaCalendarDay[]>(
+      `${TRADING_HOST}/v2/calendar?start=${start}&end=${end}`,
+    );
+
+    const out: CalendarDay[] = [];
+    for (const day of days) {
+      const openMinute = parseClockTime(day.open);
+      const closeMinute = parseClockTime(day.close);
+      if (openMinute === null || closeMinute === null) continue;
+      out.push({ date: day.date, openMinute, closeMinute });
+    }
+
+    return out;
   }
 
   async assets(): Promise<TradableAsset[]> {

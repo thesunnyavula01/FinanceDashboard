@@ -206,28 +206,30 @@ export interface PortfolioResponse {
   note?: string;
 }
 
-export type CurveRange = "1W" | "1M" | "3M" | "YTD" | "ALL";
+export type CurveRange = "1D" | "1W" | "1M" | "3M" | "1Y" | "ALL";
 
-export const CURVE_RANGES: CurveRange[] = ["1W", "1M", "3M", "YTD", "ALL"];
+export const CURVE_RANGES: CurveRange[] = ["1D", "1W", "1M", "3M", "1Y", "ALL"];
 
 /**
- * One session on the equity curve.
+ * One point on the equity curve.
  *
- * `equity` is the member's account in dollars; every other field is that
- * session's value indexed to 100 at the start of the visible range, which is
- * what makes a $100,000 portfolio and a $640 share of SPY comparable at all.
- * Null where a series has no data for that session yet.
+ * Every series is in dollars. `me` is the account as it is; the benchmarks are
+ * what the same money would have been worth had it gone there instead, which is
+ * how a $640 share of SPY ends up drawable on an axis of account values. Null
+ * where a series has no data for that point yet.
  */
 export interface CurveRow {
-  date: string;
-  equity: number;
-  me: number | null;
+  /** Session date on the session ranges; an RFC-3339 instant on 1D. */
+  t: string;
+  /** What the axis and the crosshair show: "08/30", or "10:35" on 1D. */
+  label: string;
+  me: number;
   spy: number | null;
   qqq: number | null;
   club: number | null;
 }
 
-/** Percentage move across the visible range, per line. Null when unmeasurable. */
+/** Percentage move from the baseline to the last point, per line. */
 export interface CurveSummary {
   me: number | null;
   spy: number | null;
@@ -237,8 +239,21 @@ export interface CurveSummary {
 
 export interface HistoryResponse {
   range: CurveRange;
-  /** The session everything is indexed to 100 at. */
+  /** True when this is one session at five-minute resolution rather than many. */
+  intraday: boolean;
+  /** Which session 1D drew. Null on every other range. */
+  sessionDate: string | null;
+  /**
+   * The date the baseline was taken at: the first session in the window, or on
+   * 1D the *previous* session, whose close the day is measured against.
+   */
   baseDate: string | null;
+  /** The baseline in dollars. Every line is scaled to start here. */
+  base: number | null;
+  /** The account's latest value. */
+  value: number | null;
+  /** `value` less `base`. The dollar figure at the top of the panel. */
+  change: number | null;
   seasonStart: string;
   startingCash: number;
   rows: CurveRow[];

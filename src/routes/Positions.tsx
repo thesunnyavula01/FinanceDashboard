@@ -34,7 +34,10 @@ export function Positions() {
     setRange,
     isLoading: historyLoading,
     isError: historyError,
-  } = useHistory("ALL");
+    // Opens on the day, the way every broker's account screen does. A member
+    // checking in at lunchtime wants to know what today did; the season is one
+    // key away and stays cached once they have looked at it.
+  } = useHistory("1D");
 
   const columns: Column<ValuedPosition>[] = [
     {

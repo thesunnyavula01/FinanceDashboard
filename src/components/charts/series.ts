@@ -12,8 +12,8 @@ import type { CurveRow } from "@/lib/api";
  * the interface everywhere else in this app and never a number, so here it
  * marks the one line that is *you* — identity, not performance. The benchmarks
  * are greys: they are the ruler, and a ruler should not shout. Green and red
- * stay reserved for P/L, which on this chart means the excess-return strip and
- * nothing else.
+ * stay reserved for P/L, which on this chart means the change at the top of the
+ * panel and the excess-return strip, and nothing else.
  */
 export const SERIES = [
   { key: "me", label: "You", color: "var(--color-accent)", width: 1.75, dash: undefined },
@@ -23,7 +23,11 @@ export const SERIES = [
 ] as const;
 
 export interface Point extends CurveRow {
-  /** Your index less SPY's. The whole reason the bottom strip exists. */
+  /**
+   * Your account less what the same money would be worth in SPY, in dollars.
+   * The whole reason the bottom strip exists, and the one number on this screen
+   * that answers "am I beating the market" without tracing two lines.
+   */
   excess: number | null;
 }
 

@@ -45,8 +45,14 @@ function stubProvider(options: { unknown?: string[] } = {}) {
     async dailyBars() {
       return new Map();
     },
+    async intradayBars() {
+      return new Map();
+    },
     async clock() {
       throw new Error("not used");
+    },
+    async calendar() {
+      return [];
     },
     async assets() {
       return [];
@@ -223,8 +229,14 @@ test("a failing provider degrades to no price rather than an error", async () =>
     async dailyBars() {
       return new Map();
     },
+    async intradayBars() {
+      return new Map();
+    },
     async clock() {
       throw new Error("not used");
+    },
+    async calendar() {
+      return [];
     },
     async assets() {
       return [];

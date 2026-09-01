@@ -3,13 +3,16 @@ import { test } from "node:test";
 import {
   alignCloses,
   cashDelta,
+  firstUsable,
   indexTo100,
   parseRange,
   qtyDelta,
   rangeStart,
   replayEquity,
+  replayIntraday,
+  returnFromBase,
+  scaleTo,
   shiftDate,
-  totalReturn,
   type TradeRecord,
 } from "./curve.ts";
 
@@ -227,10 +230,34 @@ test("indexing puts every line on 100 at its first usable value", () => {
   assert.deepEqual(indexTo100([null, null]), [null, null]);
 });
 
-test("total return spans the first and last usable values", () => {
-  assert.equal(totalReturn([100, 110]), 10);
-  assert.equal(totalReturn([null, 200, 150]), -25);
-  assert.equal(totalReturn([null, null]), null);
+test("scaling puts a benchmark onto the account's axis without reshaping it", () => {
+  const round = (values: (number | null)[]) =>
+    values.map((value) => (value === null ? null : Number(value.toFixed(6))));
+
+  // $640 SPY, a $100,000 account: the line starts where the money did and the
+  // percentage moves survive intact.
+  assert.deepEqual(round(scaleTo([640, 672, 608], 100_000)), [100_000, 105_000, 95_000]);
+  // An explicit base is the 1D case: the day starts at yesterday's close, which
+  // is not one of the points on screen.
+  assert.deepEqual(round(scaleTo([101, 102], 50_000, 100)), [50_500, 51_000]);
+  // Nothing to scale from, and nothing to scale to.
+  assert.deepEqual(scaleTo([null, null], 100_000), [null, null]);
+  assert.deepEqual(scaleTo([640, 672], 0), [null, null]);
+});
+
+test("return is measured from an explicit base, not from the first point", () => {
+  assert.equal(returnFromBase([100, 110], 100), 10);
+  assert.equal(returnFromBase([null, 200, 150], 200), -25);
+  // The 1D case: the account opened above yesterday's close and gave it back.
+  // Measured from the open it is flat; measured from the close it is up 1%.
+  assert.equal(returnFromBase([101_000, 101_000], 100_000), 1);
+  assert.equal(returnFromBase([null, null], 100), null);
+  assert.equal(returnFromBase([100], null), null);
+});
+
+test("the first usable value skips leading gaps and zeroes", () => {
+  assert.equal(firstUsable([null, 0, 120, 130]), 120);
+  assert.equal(firstUsable([null, null]), null);
 });
 
 test("date shifting is UTC and does not drift", () => {
@@ -243,25 +270,163 @@ test("a range never starts before the season does", () => {
   const seasonStart = "2026-08-01";
   const today = "2026-08-30";
 
-  // A club that began in August has no 3 months and no January.
+  // A club that began in August has no three months and no year behind it.
   assert.equal(rangeStart("3M", today, seasonStart), seasonStart);
-  assert.equal(rangeStart("YTD", today, seasonStart), seasonStart);
+  assert.equal(rangeStart("1Y", today, seasonStart), seasonStart);
   assert.equal(rangeStart("ALL", today, seasonStart), seasonStart);
   // A week fits inside it, so it is honoured.
   assert.equal(rangeStart("1W", today, seasonStart), "2026-08-23");
 });
 
-test("YTD and ALL differ once a season spans a new year", () => {
-  const seasonStart = "2025-09-02";
+test("1Y and ALL differ once a season is older than a year", () => {
+  const seasonStart = "2024-09-02";
   const today = "2026-03-04";
 
-  assert.equal(rangeStart("YTD", today, seasonStart), "2026-01-01");
+  assert.equal(rangeStart("1Y", today, seasonStart), "2025-03-04");
   assert.equal(rangeStart("ALL", today, seasonStart), seasonStart);
 });
 
 test("an unrecognised range falls back to the whole season", () => {
-  assert.equal(parseRange("1w"), "1W");
-  assert.equal(parseRange(" ytd "), "YTD");
+  assert.equal(parseRange("1d"), "1D");
+  assert.equal(parseRange(" 1y "), "1Y");
+  // YTD was a tab once. A stale client asking for it gets the season, not a 500.
+  assert.equal(parseRange("YTD"), "ALL");
   assert.equal(parseRange("6M"), "ALL");
   assert.equal(parseRange(null), "ALL");
+});
+
+// ---------------------------------------------------------------------------
+// 1D
+// ---------------------------------------------------------------------------
+
+/** 09:30, 09:35 and 09:40 ET on 2026-03-04, which is EST. */
+const STAMPS = ["2026-03-04T14:30:00Z", "2026-03-04T14:35:00Z", "2026-03-04T14:40:00Z"];
+
+function intradayFill(
+  at: string,
+  symbol: string,
+  side: TradeRecord["side"],
+  qty: number,
+  price: number,
+): TradeRecord {
+  return { symbol, side, qty, price, notional: Number((qty * price).toFixed(2)), executedAt: at };
+}
+
+test("the day starts from yesterday's book valued at yesterday's closes", () => {
+  // Bought 10 AAPL at 100 last week; it closed yesterday at 120. The day opens
+  // with $99,000 of cash and $1,200 of stock, so the baseline is $100,200 —
+  // not the $100,000 the season started with.
+  const { base, points } = replayIntraday({
+    stamps: STAMPS,
+    sessionDate: "2026-03-04",
+    trades: [intradayFill("2026-03-02T14:35:00Z", "AAPL", "BUY", 10, 100)],
+    startingCash: 100_000,
+    prices: new Map(),
+    prevCloses: new Map([["AAPL", 120]]),
+  });
+
+  assert.equal(base, 100_200);
+  // No prints today, so the position is carried at yesterday's close all day.
+  assert.deepEqual(
+    points.map((p) => p.equity),
+    [100_200, 100_200, 100_200],
+  );
+});
+
+test("a bucket with no print carries the last one forward", () => {
+  const { points } = replayIntraday({
+    stamps: STAMPS,
+    sessionDate: "2026-03-04",
+    trades: [intradayFill("2026-03-02T14:35:00Z", "THIN", "BUY", 10, 100)],
+    startingCash: 100_000,
+    // IEX is a slice of the tape: a thin name simply does not print in the
+    // middle bucket. That is missing data, not a price of zero.
+    prices: new Map([["THIN", new Map([[STAMPS[0]!, 110], [STAMPS[2]!, 130]])]]),
+    prevCloses: new Map([["THIN", 100]]),
+  });
+
+  assert.deepEqual(
+    points.map((p) => p.equity),
+    [100_100, 100_100, 100_300],
+  );
+});
+
+test("a fill mid-session lands on the bucket it happened in, not on the open", () => {
+  const { base, points } = replayIntraday({
+    stamps: STAMPS,
+    sessionDate: "2026-03-04",
+    // 09:33 ET, which is inside the 09:30 bucket and before the 09:35 one.
+    trades: [intradayFill("2026-03-04T14:33:00Z", "NVDA", "BUY", 10, 100)],
+    startingCash: 100_000,
+    prices: new Map([["NVDA", new Map([[STAMPS[1]!, 100], [STAMPS[2]!, 150]])]]),
+    prevCloses: new Map(),
+  });
+
+  // The day opened flat: nothing was held before the bell.
+  assert.equal(base, 100_000);
+  assert.deepEqual(
+    points.map((p) => p.equity),
+    [100_000, 100_000, 100_500],
+  );
+});
+
+test("a short drawn intraday gains as the price falls", () => {
+  const { base, points } = replayIntraday({
+    stamps: STAMPS,
+    sessionDate: "2026-03-04",
+    trades: [intradayFill("2026-03-02T14:35:00Z", "TSLA", "SHORT", 10, 100)],
+    startingCash: 100_000,
+    prices: new Map([["TSLA", new Map([[STAMPS[1]!, 80], [STAMPS[2]!, 130]])]]),
+    prevCloses: new Map([["TSLA", 100]]),
+  });
+
+  // Proceeds of 1,000 landed in cash last week; the obligation marks against it.
+  assert.equal(base, 100_000);
+  assert.deepEqual(
+    points.map((p) => p.equity),
+    [100_000, 100_200, 99_700],
+  );
+});
+
+test("the last bucket takes the live mark and any fill that beat the bar", () => {
+  const { points } = replayIntraday({
+    stamps: STAMPS,
+    sessionDate: "2026-03-04",
+    trades: [
+      intradayFill("2026-03-02T14:35:00Z", "NVDA", "BUY", 10, 100),
+      // 09:44 ET: after the last bar opened, and the bar has not closed yet.
+      // A member who just traded must see it rather than wait five minutes.
+      intradayFill("2026-03-04T14:44:00Z", "NVDA", "BUY", 10, 100),
+    ],
+    startingCash: 100_000,
+    prices: new Map([["NVDA", new Map([[STAMPS[2]!, 100]])]]),
+    prevCloses: new Map([["NVDA", 100]]),
+    marks: new Map([["NVDA", 150]]),
+  });
+
+  assert.deepEqual(
+    points.map((p) => p.equity),
+    // 99,000 + 10 x 100, twice over, then 98,000 of cash and 20 shares at the
+    // live 150.
+    [100_000, 100_000, 101_000],
+  );
+});
+
+test("a fill from after the session on screen is not drawn into it", () => {
+  // On a Saturday the chart draws Friday. Friday could not have known about a
+  // fill that has not happened yet, and nor can its line.
+  const { base, points } = replayIntraday({
+    stamps: STAMPS,
+    sessionDate: "2026-03-04",
+    trades: [intradayFill("2026-03-05T14:35:00Z", "NVDA", "BUY", 10, 100)],
+    startingCash: 100_000,
+    prices: new Map(),
+    prevCloses: new Map(),
+  });
+
+  assert.equal(base, 100_000);
+  assert.deepEqual(
+    points.map((p) => p.equity),
+    [100_000, 100_000, 100_000],
+  );
 });

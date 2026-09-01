@@ -252,7 +252,7 @@ function summarise(rows: LeaderboardRow[], benchmarkReturn: number | null): Club
  * A benchmark's percentage move across a series of closes.
  *
  * The first close in the window is the baseline and the last is the mark, which
- * is the same convention `totalReturn()` in the curve uses — the two figures
+ * is the same convention `returnFromBase()` in the curve uses — the two figures
  * appear on adjacent screens and disagreeing about what "SPY is up 4%" means
  * would be worse than either being slightly off.
  */

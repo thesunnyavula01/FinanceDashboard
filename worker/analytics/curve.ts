@@ -26,7 +26,17 @@ import type { OrderSide } from "../orders/engine.ts";
  * correct in both directions.
  */
 
-export const CURVE_RANGES = ["1W", "1M", "3M", "YTD", "ALL"] as const;
+/**
+ * The ranges, in the order the tabs sit on screen.
+ *
+ * `1D` is the odd one and the reason half of this file exists: every other
+ * range is one point per session and is answered by the replay below, while
+ * 1D is one point per five-minute bar inside a single session and is answered
+ * by `replayIntraday`. YTD is deliberately absent — a club season that starts
+ * in the autumn makes it a second, worse spelling of ALL for most of the year,
+ * and 1Y is the tab a member actually reaches for.
+ */
+export const CURVE_RANGES = ["1D", "1W", "1M", "3M", "1Y", "ALL"] as const;
 export type CurveRange = (typeof CURVE_RANGES)[number];
 
 /** The two indices every club measures itself against. */
@@ -154,6 +164,149 @@ export function replayEquity({
   return points;
 }
 
+/** One five-minute bucket inside a session. The 1D chart's row. */
+export interface IntradayPoint {
+  /** RFC-3339 instant at the start of the bar this was valued at. */
+  at: string;
+  equity: number;
+  cash: number;
+  longMv: number;
+  shortMv: number;
+}
+
+export interface IntradayReplayInput {
+  /** Bar instants for the session, ascending. This is the x-axis. */
+  stamps: string[];
+  /** The session being drawn, YYYY-MM-DD. */
+  sessionDate: string;
+  /** Every fill in the portfolio, in any order. */
+  trades: TradeRecord[];
+  startingCash: number;
+  /** symbol -> instant -> that bucket's close. Sparse; gaps carry forward. */
+  prices: Map<string, Map<string, number>>;
+  /** symbol -> the previous session's official close. The day's opening mark. */
+  prevCloses: Map<string, number>;
+  /** Live marks, applied to the final bucket only. */
+  marks?: Map<string, number>;
+}
+
+export interface IntradayReplay {
+  points: IntradayPoint[];
+  /**
+   * The account at the previous session's close — the day's baseline, and the
+   * denominator of every figure the 1D chart reports.
+   */
+  base: number;
+}
+
+/**
+ * Replay one session at five-minute resolution.
+ *
+ * The same walk as `replayEquity`, one level down, and it exists as its own
+ * function because three things genuinely differ at this resolution:
+ *
+ * **The day starts from a book, not from cash.** Every fill before this session
+ * is applied first, in one pass, to produce the cash and positions the member
+ * woke up with. Valuing that book at the *previous* session's closes gives
+ * `base`, which is what the day's change is measured against — the same number
+ * the positions grid calls day P/L, arrived at the same way.
+ *
+ * **Fills land at an instant, not on a date.** A buy at 11:42 belongs to the
+ * 11:45 point and not to the 09:30 one, so the cursor advances on timestamps.
+ *
+ * **A gap is a symbol that did not print, not a symbol that is worthless.**
+ * Intraday bars come from the IEX feed, which is a slice of the tape, so a thin
+ * name has no bar in plenty of buckets. Marks are seeded from the previous
+ * close and carried forward, exactly as the daily replay carries closes.
+ */
+export function replayIntraday({
+  stamps,
+  sessionDate,
+  trades,
+  startingCash,
+  prices,
+  prevCloses,
+  marks,
+}: IntradayReplayInput): IntradayReplay {
+  const fills = trades
+    .map((trade) => ({
+      ...trade,
+      date: exchangeDate(trade.executedAt),
+      at: Date.parse(trade.executedAt),
+    }))
+    .sort((a, b) => a.at - b.at);
+
+  const held = new Map<string, number>();
+  const lastPrice = new Map<string, number>();
+  let cash = startingCash;
+
+  const during: typeof fills = [];
+
+  for (const fill of fills) {
+    if (fill.date < sessionDate) {
+      cash += cashDelta(fill);
+      held.set(fill.symbol, (held.get(fill.symbol) ?? 0) + qtyDelta(fill));
+      if (!lastPrice.has(fill.symbol)) lastPrice.set(fill.symbol, fill.price);
+    } else if (fill.date === sessionDate) {
+      during.push(fill);
+    }
+    // A fill after this session is not this session's business. On a Saturday
+    // the chart draws Friday, and Friday could not have known about it.
+  }
+
+  // Seeded after the pre-session fills, so a real close beats an old trade
+  // price — but a symbol with no close at all (bought yesterday, delisted
+  // since) still carries the only price that ever existed for it.
+  for (const [symbol, close] of prevCloses) {
+    if (close > 0) lastPrice.set(symbol, close);
+  }
+
+  let base = cash;
+  for (const [symbol, qty] of held) {
+    if (qty === 0) continue;
+    base += qty * (lastPrice.get(symbol) ?? 0);
+  }
+
+  const lastStamp = stamps.at(-1);
+  let cursor = 0;
+  const points: IntradayPoint[] = [];
+
+  for (const stamp of stamps) {
+    // The final point is "now", not the instant its bucket opened, which is
+    // why it takes every remaining fill: a member who traded four minutes ago
+    // must see that trade on the chart rather than wait for the bar to close.
+    const cutoff = stamp === lastStamp ? Number.POSITIVE_INFINITY : Date.parse(stamp);
+
+    while (cursor < during.length && during[cursor]!.at <= cutoff) {
+      const fill = during[cursor]!;
+      cursor += 1;
+      cash += cashDelta(fill);
+      held.set(fill.symbol, (held.get(fill.symbol) ?? 0) + qtyDelta(fill));
+      if (!lastPrice.has(fill.symbol)) lastPrice.set(fill.symbol, fill.price);
+    }
+
+    let longMv = 0;
+    let shortMv = 0;
+
+    for (const [symbol, qty] of held) {
+      if (qty === 0) continue;
+
+      const printed = prices.get(symbol)?.get(stamp);
+      if (printed !== undefined && printed > 0) lastPrice.set(symbol, printed);
+
+      const live = stamp === lastStamp ? marks?.get(symbol) : undefined;
+      const price = live ?? lastPrice.get(symbol) ?? 0;
+
+      if (qty > 0) longMv += qty * price;
+      else shortMv += -qty * price;
+    }
+
+    points.push({ at: stamp, cash, longMv, shortMv, equity: cash + longMv - shortMv });
+  }
+
+  return { points, base };
+}
+
 /**
  * Put a sparse bar series onto a fixed date axis, carrying each close forward.
  *
@@ -175,24 +328,63 @@ export function alignCloses(
 }
 
 /**
- * Index a series to 100 at its first usable value.
+ * Rescale a series so that `seriesBase` reads as `targetBase`.
  *
- * This is what makes a $100,000 portfolio comparable to a $640 share of SPY:
- * both start at 100 and the distance between the lines is the only thing on
- * the chart, which is exactly the question a club is asking.
+ * This is what puts a $640 share of SPY on an axis of dollars. The chart's
+ * y-axis is the member's account, so a benchmark is drawn as the thing a member
+ * can actually compare against it: what their money would have been worth had
+ * it gone into SPY at the same starting line. The shape of the line is
+ * untouched — only the units change — so "SPY is up 2.1%" means the same thing
+ * on the chart as it does on the leaderboard.
+ *
+ * Omit `seriesBase` to scale from the series' own first usable value, which is
+ * what every range but 1D wants. Pass it explicitly for 1D, where each line
+ * starts the day at its previous close rather than at its first print.
  */
-export function indexTo100(values: readonly (number | null)[]): (number | null)[] {
-  const base = values.find((value) => value !== null && value > 0) ?? null;
-  if (base === null) return values.map(() => null);
-  return values.map((value) => (value === null ? null : (value / base) * 100));
+export function scaleTo(
+  values: readonly (number | null)[],
+  targetBase: number,
+  seriesBase?: number | null,
+): (number | null)[] {
+  const base =
+    seriesBase === undefined ? (values.find((value) => value !== null && value > 0) ?? null) : seriesBase;
+
+  if (base === null || !(base > 0) || !(targetBase > 0)) return values.map(() => null);
+  return values.map((value) => (value === null ? null : (value / base) * targetBase));
 }
 
-/** Percentage move from the first usable value to the last. Null if either is missing. */
-export function totalReturn(values: readonly (number | null)[]): number | null {
-  const first = values.find((value) => value !== null && value > 0) ?? null;
+/**
+ * Index a series to 100 at its first usable value.
+ *
+ * Kept because it is the one honest way to compare two series whose units
+ * differ, and it is what `scaleTo` is underneath.
+ */
+export function indexTo100(values: readonly (number | null)[]): (number | null)[] {
+  return scaleTo(values, 100);
+}
+
+/**
+ * Percentage move from an explicit base to the last usable value.
+ *
+ * The base is passed in rather than taken from the head of the series because
+ * on the 1D chart it is not in the series at all: the day is measured against
+ * the previous session's close, which is a number from before the first point
+ * on screen. Every range routes through this, so "up 4.8%" is arrived at the
+ * same way on all of them.
+ */
+export function returnFromBase(
+  values: readonly (number | null)[],
+  base: number | null,
+): number | null {
+  if (base === null || !(base > 0)) return null;
   const last = [...values].reverse().find((value) => value !== null) ?? null;
-  if (first === null || last === null) return null;
-  return ((last - first) / first) * 100;
+  if (last === null) return null;
+  return ((last - base) / base) * 100;
+}
+
+/** The first value a series actually has. The base for every range but 1D. */
+export function firstUsable(values: readonly (number | null)[]): number | null {
+  return values.find((value) => value !== null && value > 0) ?? null;
 }
 
 /**
@@ -218,20 +410,25 @@ export function parseRange(raw: string | null | undefined): CurveRange {
 /**
  * The first date a range covers.
  *
- * Always clamped to the season start: a club that began in March has no
- * "YTD" before March, and drawing the index from January while the member's
- * line starts in March would put the two on different baselines and make the
+ * Always clamped to the season start: a club that began in March has no year
+ * before March, and drawing a benchmark from last June while the member's line
+ * starts in March would put the two on different baselines and make the
  * comparison a lie.
+ *
+ * 1D returns today because it is not a window over sessions at all — it is one
+ * session at five-minute resolution, and `buildHistory` routes it elsewhere
+ * before this is reached. The answer here is the honest one for the shape of
+ * the function rather than a case anything depends on.
  */
 export function rangeStart(range: CurveRange, today: string, seasonStart: string): string {
   const raw =
     range === "ALL"
       ? seasonStart
-      : range === "YTD"
-        ? `${today.slice(0, 4)}-01-01`
+      : range === "1D"
+        ? today
         : range === "1W"
           ? shiftDate(today, { days: 7 })
-          : shiftDate(today, { months: range === "1M" ? 1 : 3 });
+          : shiftDate(today, { months: range === "1M" ? 1 : range === "3M" ? 3 : 12 });
 
   return raw < seasonStart ? seasonStart : raw;
 }

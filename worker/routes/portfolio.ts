@@ -59,13 +59,21 @@ portfolio.get("/", async (c) => {
 });
 
 /**
- * GET /api/portfolio/history?range=1W|1M|3M|YTD|ALL — the equity curve.
+ * GET /api/portfolio/history?range=1D|1W|1M|3M|1Y|ALL — the equity curve.
  *
- * One row per session, with the member's account, SPY, QQQ and the club average
- * all indexed to 100 at the first session in the range. Indexing at the range
- * start rather than at the season start is deliberate: a member who switches to
- * 1W is asking how this week went against the market, and a chart still
+ * Every series is in dollars, on the member's own scale: the account is drawn
+ * as it is, and SPY, QQQ and the club average are each drawn as what the same
+ * money would have been worth had it gone there instead. Scaled at the range
+ * start rather than at the season start is deliberate — a member who switches
+ * to 1W is asking how this week went against the market, and a chart still
  * measuring from January answers a different question.
+ *
+ * `1D` is a different chart behind the same URL: one session at five-minute
+ * resolution, measured against the previous session's close rather than
+ * against the first point on screen, and with no club line because the club
+ * average is a nightly aggregate. The response says which it built via
+ * `intraday`, and which session via `sessionDate` — before the opening bell
+ * that is yesterday, which is what a member means by "how did we do".
  *
  * Unlike /api/portfolio this endpoint is priced, and that is not a
  * contradiction. The positions grid re-values on the 20-second quote poll and

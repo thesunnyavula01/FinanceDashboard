@@ -59,6 +59,64 @@ export interface BarQuery {
   limit?: number;
 }
 
+/**
+ * One bar inside a session.
+ *
+ * Carries both the instant it opened and the session it belongs to, because
+ * the two answer different questions and re-deriving one from the other at
+ * every call site is how a chart ends up putting 16:00 on the wrong day. `at`
+ * is the provider's own timestamp, verbatim, so it works as a map key that
+ * lines up across symbols.
+ */
+export interface IntradayBar {
+  /** RFC-3339 instant at the start of the bar, exactly as the provider sent it. */
+  at: string;
+  /** Exchange-local session date, YYYY-MM-DD. */
+  date: string;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+}
+
+export type BarTimeframe = "1Min" | "5Min" | "15Min";
+
+/**
+ * One session on the exchange calendar, in minutes past midnight ET.
+ *
+ * The 1D chart's bounds. Intraday bars arrive with pre-market and after-hours
+ * buckets in them, and this app has never treated those as the market being
+ * open — a quote does not come from them and an order cannot reach them, so a
+ * chart must not draw them either. Minutes rather than "09:30" because the only
+ * thing anyone does with these is compare, and a half day closing at 780 rather
+ * than 960 then needs no special case anywhere.
+ */
+export interface CalendarDay {
+  /** YYYY-MM-DD. */
+  date: string;
+  /** 570 on an ordinary day: 09:30 ET. */
+  openMinute: number;
+  /** 960 on an ordinary day, 780 on a half day: 16:00 and 13:00 ET. */
+  closeMinute: number;
+}
+
+/** The regular session, when the exchange calendar cannot be reached. */
+export const DEFAULT_SESSION: Omit<CalendarDay, "date"> = {
+  openMinute: 9 * 60 + 30,
+  closeMinute: 16 * 60,
+};
+
+export interface IntradayQuery {
+  /** Inclusive. YYYY-MM-DD, or an RFC-3339 instant. */
+  start: string;
+  /** Omit for "up to now", which is what an intraday chart always wants. */
+  end?: string;
+  timeframe: BarTimeframe;
+  /** Hard ceiling on bars per request, mostly a guard against runaway paging. */
+  limit?: number;
+}
+
 export interface MarketClock {
   state: SessionState;
   /** Regular trading hours only. Pre-market and after-hours are not "open". */
@@ -101,7 +159,11 @@ export interface PriceProvider {
   /** Batched. Symbols with no usable price are absent from the result. */
   quotes(symbols: string[]): Promise<Map<string, Quote>>;
   dailyBars(symbols: string[], query: BarQuery): Promise<Map<string, DailyBar[]>>;
+  /** Bars inside a session, for the 1D chart. Batched like everything else. */
+  intradayBars(symbols: string[], query: IntradayQuery): Promise<Map<string, IntradayBar[]>>;
   clock(): Promise<MarketClock>;
+  /** Which days the exchange held a session, and the hours it kept. */
+  calendar(start: string, end: string): Promise<CalendarDay[]>;
   assets(): Promise<TradableAsset[]>;
 }
 
@@ -166,4 +228,27 @@ const ET_DATE = new Intl.DateTimeFormat("en-CA", {
 export function exchangeDate(at: Date | string | number = new Date()): string {
   const date = at instanceof Date ? at : new Date(at);
   return ET_DATE.format(date);
+}
+
+const ET_CLOCK = new Intl.DateTimeFormat("en-US", {
+  timeZone: "America/New_York",
+  hour: "2-digit",
+  minute: "2-digit",
+  hour12: false,
+});
+
+/**
+ * The exchange's wall-clock time for an instant, as HH:MM.
+ *
+ * This is the 1D chart's x-axis, and it is formatted here rather than in the
+ * browser on purpose: a member opening the terminal from a different timezone
+ * must still see the session run 09:30 to 16:00. The market's hours are the
+ * market's, not the viewer's.
+ */
+export function exchangeTime(at: Date | string | number = new Date()): string {
+  const date = at instanceof Date ? at : new Date(at);
+  const parts = ET_CLOCK.formatToParts(date);
+  const get = (type: string) => parts.find((part) => part.type === type)?.value ?? "00";
+  // Some ICU builds render midnight as hour 24 under hour12:false.
+  return `${String(Number(get("hour")) % 24).padStart(2, "0")}:${get("minute")}`;
 }

@@ -1,22 +1,31 @@
 import { Suspense, lazy, useMemo, type ReactNode } from "react";
 import { CURVE_RANGES, type CurveRange, type HistoryResponse } from "@/lib/api";
-import { money, percent, signColor } from "@/lib/format";
+import { money, moneySigned, percent, signColor } from "@/lib/format";
 import { Panel } from "@/components/terminal/Panel";
 import { SERIES, axisDate, type Point } from "./series";
 
 /**
  * The equity curve.
  *
- * Four lines, all indexed to 100 at the left edge, because the only question a
- * club is really asking is which line is on top. A $100,000 portfolio and a
- * $640 share of SPY cannot be plotted against each other in dollars; indexed,
- * the vertical distance between them *is* the answer.
+ * Four lines on one axis of dollars: the account as it is, and SPY, QQQ and the
+ * club average each drawn as what the same money would have been worth had it
+ * gone there instead. That is the question a member is actually asking — not
+ * "how did the index do" but "would I have been better off in the index" — and
+ * in dollars it is answerable by looking, because the vertical gap between two
+ * lines *is* the amount.
  *
- * Indexing happens at the start of the visible range rather than at the season
- * start, so switching to 1W answers "how did this week go against the market"
- * instead of redrawing the same January baseline at a different zoom. The panel
- * says which date is the 100, because a normalised chart with an unstated
- * baseline is a chart you cannot check.
+ * The baseline is the range start, not the season start, so switching to 1W
+ * answers "how did this week go against the market" instead of redrawing the
+ * same January comparison at a different zoom. The panel says which date the
+ * lines start from, because a rescaled chart with an unstated baseline is a
+ * chart you cannot check.
+ *
+ * **1D is a different chart wearing the same panel.** One session at
+ * five-minute resolution, measured against the previous session's close rather
+ * than against the first point on screen — so the account can be down on the
+ * day while up since the bell, which is the truth and is what the day P/L on
+ * the positions grid says too. The club average has no intraday figure and is
+ * dimmed rather than dropped.
  *
  * Everything except the plot itself lives in the main bundle: the panel, the
  * range toggles, the legend and the summary all render on the first frame, and
@@ -42,33 +51,16 @@ export function EquityCurve({
     () =>
       (history?.rows ?? []).map((row) => ({
         ...row,
-        excess: row.me === null || row.spy === null ? null : row.me - row.spy,
+        excess: row.spy === null ? null : row.me - row.spy,
       })),
     [history],
   );
 
-  const summary = history?.summary;
   const hasClub = points.some((point) => point.club !== null);
   const last = points.at(-1);
 
   return (
-    <Panel
-      title="Performance"
-      meta={
-        <span className="flex items-center gap-2">
-          {summary?.me !== null && summary?.me !== undefined && (
-            <span className={signColor(summary.me)}>You {percent(summary.me)}</span>
-          )}
-          {summary?.spy !== null && summary?.spy !== undefined && (
-            <span className="text-ink-faint">SPY {percent(summary.spy)}</span>
-          )}
-          {history?.baseDate && (
-            <span className="text-ink-faint">100 = {axisDate(history.baseDate)}</span>
-          )}
-        </span>
-      }
-      className="min-h-[16rem]"
-    >
+    <Panel title="Performance" meta={<Headline history={history} />} className="min-h-[16rem]">
       <div className="flex h-full min-h-0 flex-col gap-1.5">
         <div className="flex shrink-0 flex-wrap items-center justify-between gap-2">
           <RangeToggle range={range} onChange={onRangeChange} />
@@ -83,17 +75,54 @@ export function EquityCurve({
           <Message>{history.note}</Message>
         ) : points.length < 2 ? (
           <Message>
-            One session so far. The curve fills in as the season does — check back tomorrow.
+            {history?.intraday
+              ? "The session has only just opened. The line fills in every five minutes."
+              : "One session so far. The curve fills in as the season does — check back tomorrow."}
           </Message>
         ) : (
           <Suspense fallback={<Message pulse>Drawing</Message>}>
-            <CurvePlot points={points} live={history?.live ?? false} />
+            <CurvePlot
+              points={points}
+              base={history?.base ?? null}
+              live={history?.live ?? false}
+            />
           </Suspense>
         )}
 
         <Caption history={history} last={last} />
       </div>
     </Panel>
+  );
+}
+
+/**
+ * The number a member came to the screen for.
+ *
+ * What the account is worth, what it has made or lost over the range, and what
+ * that is as a percentage — in that order, because the dollar figure is the one
+ * that means something to a member and the percentage is the one that compares.
+ * Green and red are earned here: this is a result, not an interface.
+ */
+function Headline({ history }: { history: HistoryResponse | null }) {
+  if (!history || history.rows.length === 0) return null;
+
+  const { value, change, summary, baseDate, intraday } = history;
+
+  return (
+    <span className="flex flex-wrap items-center gap-2">
+      {value !== null && <span className="num text-ink">{money(value)}</span>}
+      {change !== null && (
+        <span className={`num ${signColor(change)}`}>
+          {moneySigned(change)}
+          {summary.me !== null && ` (${percent(summary.me)})`}
+        </span>
+      )}
+      {baseDate && (
+        <span className="text-ink-faint">
+          {intraday ? `vs ${axisDate(baseDate)} close` : `since ${axisDate(baseDate)}`}
+        </span>
+      )}
+    </span>
   );
 }
 
@@ -126,7 +155,8 @@ function RangeToggle({
  *
  * A line with no data is dimmed rather than dropped, and says why on hover.
  * Before the nightly snapshot job has run there is no club average to draw, and
- * a legend that quietly loses an entry reads as a bug.
+ * on 1D there is no intraday club average to draw at all — a legend that
+ * quietly loses an entry between two range tabs reads as a bug.
  */
 function Legend({ hasClub, clubNote }: { hasClub: boolean; clubNote: string | null }) {
   return (
@@ -158,12 +188,15 @@ function Legend({ hasClub, clubNote }: { hasClub: boolean; clubNote: string | nu
  * A curve replayed from the blotter and a curve read from nightly snapshots
  * look identical on screen and are not the same claim, so the panel says which
  * one it drew rather than letting the member assume the stronger of the two.
+ * On 1D it also names the session, because before the opening bell the chart is
+ * showing yesterday and nothing else on screen would say so.
  */
 function Caption({ history, last }: { history: HistoryResponse | null; last?: Point }) {
   if (!history || history.rows.length === 0) return null;
 
-  const provenance =
-    history.source === "snapshots"
+  const provenance = history.intraday
+    ? "Replayed from your blotter against five-minute bars."
+    : history.source === "snapshots"
       ? "From nightly snapshots."
       : history.source === "mixed"
         ? "Nightly snapshots, extended back through your blotter."
@@ -172,12 +205,15 @@ function Caption({ history, last }: { history: HistoryResponse | null; last?: Po
   return (
     <div className="flex shrink-0 flex-wrap items-center gap-2 border-t border-line pt-1.5">
       <span className="label label-ink">{provenance}</span>
+      {history.intraday && history.sessionDate && (
+        <span className="label label-ink">Session {axisDate(history.sessionDate)}</span>
+      )}
       {history.degraded && (
-        <span className="label text-loss">Daily bars unavailable — the curve is short.</span>
+        <span className="label text-loss">Bars unavailable — the curve is short.</span>
       )}
       {last && (
         <span className="label label-ink">
-          Latest {money(last.equity)} on {axisDate(last.date)}
+          Latest {money(last.me)} at {last.label}
         </span>
       )}
     </div>

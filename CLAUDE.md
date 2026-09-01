@@ -34,6 +34,14 @@ failure modes are painful to debug and buy us nothing here.
    `VITE_SUPABASE_ANON_KEY` may be `VITE_`-prefixed. The Alpaca keys, Finnhub key,
    Supabase service-role key, JWT secret, and invite code are Worker-only. Never
    import them into anything under `src/`.
+
+   The build enforces this rather than trusting it: `npm run build` fails on any
+   `VITE_`-prefixed variable naming a Worker secret, and on a service-role key
+   sitting in the anon slot. Those two public values are committed in
+   `.env.production` — Vite inlines them at *build* time, so they cannot live in
+   the Worker's runtime store, which is both unreadable to Vite and cleared by
+   every deploy. That mistake is the one that kept breaking deploys; see
+   DEPLOYMENT.md, "The one thing that breaks this app".
 2. **The client never writes to the database.** Client-side Supabase is read-only
    plus auth. Every mutation goes through a Worker route using the service-role
    key. RLS enforces this at the database level as a second line of defence.
@@ -657,6 +665,7 @@ worker/lib/leaderboard.ts       club ranking arithmetic: value, rank, summarise
 worker/lib/club.ts              the invite code: read, rotate, generate, compare
 worker/routes/                  auth, quotes, market, orders, portfolio, leaderboard, admin
 supabase/migrations/*.sql       schema, RLS policies, place_order() RPC
+scripts/check-client-env.ts     build-time guard on the two VITE_ values
 src/lib/                        supabase client, API client, formatters, valuation
 src/lib/sectors.ts              positions -> gross sector exposure, client-side
 src/hooks/useQuotes.ts          TanStack Query, 20s refetchInterval
@@ -733,7 +742,7 @@ npm run dev        vite dev; the Cloudflare plugin runs the Worker inside
 npm run build      typecheck + bundle -> dist/client and dist/<worker-name>
 npm run deploy     build + wrangler deploy
 npm run typecheck  tsc across the app, worker, and node configs
-npm test           node --test over worker/**/*.test.ts
+npm test           node --test over worker/**/*.test.ts and scripts/**/*.test.ts
 ```
 
 **Windows prerequisite:** `workerd` is a native binary that needs the Microsoft

@@ -111,7 +111,7 @@ interchangeable:
 
 | Store | Dashboard path | Available when | What goes here |
 |---|---|---|---|
-| **Build variables** | Settings → **Build** | Only while `npm run build` runs | `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY` |
+| **Build variables** | Settings → **Build** | Only while `npm run build` runs | Nothing — the two `VITE_*` values are committed in `.env.production` |
 | **Runtime secrets** | Settings → **Variables & Secrets** | Only while the Worker serves a request | Alpaca keys, Finnhub key, service-role key, JWT secret, invite code |
 
 Cloudflare's docs are explicit: **build variables are not accessible at runtime.**
@@ -119,14 +119,41 @@ The reverse is also true — runtime secrets are not visible during the build.
 
 ### Why this matters here
 
-`.env` and `.dev.vars` are gitignored, so **neither file exists on Cloudflare's
-build machine.** Vite bakes `VITE_*` values into the JavaScript bundle at build
-time by reading the environment. If those two variables are not registered as
-**build** variables, the bundle ships with `undefined` for the Supabase URL and
-key, and every member sees a login page that silently fails to connect.
+`.dev.vars` is gitignored, so it does not exist on Cloudflare's build machine —
+and neither did `.env`, which is what broke this app on push after push. Vite
+bakes `VITE_*` values into the JavaScript bundle at build time by reading the
+environment. With nothing to read, the bundle shipped with `undefined` for the
+Supabase URL and key, and every member saw a login page that silently failed to
+connect.
 
-The failure is quiet — no build error, no red text. The site deploys "successfully"
-and simply doesn't work. If you ever see that, this is the cause.
+The failure was quiet — no build error, no red text. The site deployed
+"successfully" and simply didn't work.
+
+**Both halves of that are fixed now, and neither needs a dashboard setting.**
+
+1. The two public values live in **`.env.production`, which is committed.** Vite
+   loads it during `vite build`, so the build has them whether it runs on a
+   laptop or in CI, and there is nothing left for a deploy to wipe. They are
+   safe to commit and *only* they are: the project URL is already in
+   `wrangler.jsonc`, and the anon key is public by design — it ships in the
+   bundle every visitor downloads, and RLS is enabled on all ten tables, so it
+   grants the read policies and nothing more.
+
+2. The build **refuses to run** if either value is missing, still holds an
+   `.env.example` placeholder, or is a service-role credential — and it refuses
+   any `VITE_`-prefixed variable naming a Worker secret, which is rule 1
+   enforced by the build rather than by memory. `scripts/check-client-env.ts`,
+   pinned by `scripts/check-client-env.test.ts`.
+
+**The trap worth naming, because it looks exactly like the fix:** setting
+`VITE_SUPABASE_ANON_KEY` in the Worker's **runtime** store does nothing. Vite
+cannot read it — a runtime binding exists only while a request is being served,
+long after the bundle was built — *and* the next deploy deletes it, because
+`wrangler deploy` reconciles runtime vars against `wrangler.jsonc` and that name
+is not in there. Putting a build-time value in the runtime store is what
+produced the "my variables got wiped again" loop. The deploy history still shows
+it: `Updated secret: VITE_SUPABASE_ANON_KEY`, then `Updated variable:
+VITE_SUPABASE_ANON_KEY`, then gone.
 
 Equally: if you put the Alpaca or service-role keys into **Build** variables,
 the Worker cannot read them at request time and every quote and order returns a
@@ -161,12 +188,10 @@ sample data until Phase 3 wires up live prices.
    The Worker name in the dashboard must match the `name` field in
    `wrangler.jsonc`, or the deploy step will not find its target.
 
-4. **Settings → Build → Add variable** (build-time):
-
-   ```
-   VITE_SUPABASE_URL
-   VITE_SUPABASE_ANON_KEY
-   ```
+4. Build variables: **nothing to set.** `VITE_SUPABASE_URL` and
+   `VITE_SUPABASE_ANON_KEY` are committed in `.env.production`, so the build
+   machine reads them straight from the repository. Do not add them to the
+   Worker's runtime store either — see "The one thing that breaks this app".
 
 5. **Settings → Variables & Secrets → Add** as type *Secret* (runtime):
 

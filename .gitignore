@@ -10,6 +10,13 @@ node_modules/
 .dev.vars
 .dev.vars.*
 !.env.example
+
+# .env.production is COMMITTED on purpose, and must stay that way. It holds
+# only the publishable Supabase URL and anon key, which Vite inlines into the
+# browser bundle at build time. Cloudflare’s build machine has no .env, so
+# ignoring this file is what made every CI build ship a login page that could
+# not connect. Nothing secret goes in it.
+!.env.production
 !.dev.vars.example
 
 # build output

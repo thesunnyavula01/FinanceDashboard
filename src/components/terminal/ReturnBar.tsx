@@ -22,6 +22,13 @@ export interface ReturnScale {
 }
 
 /**
+ * The narrowest axis a bar is ever drawn on, in percentage points. Below this
+ * the scale stops zooming in, so a club that has barely moved draws short bars
+ * rather than loud ones.
+ */
+const MIN_SPAN = 2;
+
+/**
  * The axis every row shares.
  *
  * Zero is always inside the domain, so the origin is visible even when the
@@ -32,12 +39,22 @@ export interface ReturnScale {
 export function returnScale(values: number[], ...marks: (number | null)[]): ReturnScale {
   const points = [0, ...values, ...marks.filter((mark): mark is number => mark !== null)];
 
-  const low = Math.min(...points);
-  const high = Math.max(...points);
-  // A floor on the span keeps a club that has barely traded from drawing wild
-  // bars off a 0.01% spread.
-  const span = Math.max(high - low, 2);
-  const pad = span * 0.08;
+  let low = Math.min(...points);
+  let high = Math.max(...points);
+
+  // A floor on the domain keeps a club that has barely traded from drawing wild
+  // bars off a 0.01% spread. It has to widen the domain itself and not just the
+  // padding: a season two days old whose only member is down 0.26% would
+  // otherwise get a 0.58-point-wide axis and a bar across half the track, which
+  // reads as a catastrophe rather than as noise. The widening is symmetric, and
+  // 0 is already one of the points, so the origin stays inside the domain.
+  const short = MIN_SPAN - (high - low);
+  if (short > 0) {
+    low -= short / 2;
+    high += short / 2;
+  }
+
+  const pad = (high - low) * 0.08;
 
   const min = low - pad;
   const max = high + pad;

@@ -95,8 +95,18 @@ export function Admin() {
     .filter((member) => member.portfolioId)
     .map((member) => ({ id: member.portfolioId!, name: member.displayName }));
 
+  // The console runs past the viewport and scrolls as a page: the roster and
+  // the blotter are lists, and there is no reason to fix their height.
+  //
+  // `min-h-full` rather than `h-full` is what makes that true. A flex column
+  // with a definite height distributes that height among its children, and
+  // every Panel carries `min-h-0` so it can be a fixed, internally-scrolling
+  // grid row on the screens that want one — so a definite height here crushes
+  // the roster and the corrections grid down to a couple of clipped rows each.
+  // An auto height has nothing to distribute: each panel takes what it needs
+  // and <main> does the scrolling.
   return (
-    <div className="flex h-full flex-col gap-2.5 overflow-auto p-2.5">
+    <div className="flex min-h-full flex-col gap-2.5 p-2.5">
       <div className="grid gap-2.5 lg:grid-cols-3">
         <SeasonPanel season={activeSeason} />
         <InvitePanel invite={overview.invite} universe={overview.universe} />

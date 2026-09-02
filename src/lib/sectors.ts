@@ -31,10 +31,44 @@ export interface SectorExposure {
   longShare: number;
   dayPnl: number;
   pnl: number;
+  /**
+   * The day's move as a return on the sector's own gross exposure, in percent.
+   * Defined once, here, because the grid prints this number and the exposure
+   * map colours its tiles by the per-position version of it — two things on
+   * screen together that must not disagree about which way a sector went.
+   */
+  dayReturn: number;
   positions: number;
   /** Largest holding in the sector first. */
   symbols: string[];
+  /** The rows themselves, largest first. What the map and the drill-down draw. */
+  holdings: ValuedPosition[];
 }
+
+/**
+ * Every bucket a position can land in.
+ *
+ * Duplicated from `worker/market/sectors.ts`, which is the authority and cannot
+ * be imported here — `tsconfig.app.json` includes only `src`, and worker modules
+ * import each other with explicit `.ts` extensions. The client already keeps its
+ * own copy of the "Unclassified" literal a few lines down for the same reason.
+ * Used only to say how many of the possible buckets a member is actually in.
+ */
+export const ALL_SECTORS = [
+  "Information Technology",
+  "Health Care",
+  "Financials",
+  "Consumer Discretionary",
+  "Communication Services",
+  "Industrials",
+  "Consumer Staples",
+  "Energy",
+  "Utilities",
+  "Real Estate",
+  "Materials",
+  "ETF / Fund",
+  "Unclassified",
+] as const;
 
 /**
  * Where a club stops being diversified and starts having a view.
@@ -53,8 +87,25 @@ export interface SectorBreakdown {
   concentrated: SectorExposure[];
 }
 
+/**
+ * One position's move today, as a return on what it is worth.
+ *
+ * Not the price's day change. A short is a negative `qty`, so `dayPnl` is
+ * already positive when the price falls, and dividing by the magnitude of the
+ * market value keeps that sign — a winning short reads green here exactly as it
+ * does in the P/L column. Colouring by the price's own move would paint it red.
+ *
+ * `null` means the session has no previous close to measure against yet, which
+ * is a different thing from a flat day and has to look different on screen.
+ */
+export function positionDayReturn(row: ValuedPosition): number | null {
+  if (row.prevClose === null) return null;
+  const magnitude = Math.abs(row.marketValue);
+  return magnitude === 0 ? 0 : (row.dayPnl / magnitude) * 100;
+}
+
 export function sectorBreakdown(rows: ValuedPosition[]): SectorBreakdown {
-  const buckets = new Map<string, SectorExposure & { holdings: ValuedPosition[] }>();
+  const buckets = new Map<string, SectorExposure>();
 
   for (const row of rows) {
     // A position with no sector yet is its own bucket rather than being folded
@@ -73,6 +124,7 @@ export function sectorBreakdown(rows: ValuedPosition[]): SectorBreakdown {
       longShare: 0,
       dayPnl: 0,
       pnl: 0,
+      dayReturn: 0,
       positions: 0,
       symbols: [],
       holdings: [],
@@ -94,14 +146,22 @@ export function sectorBreakdown(rows: ValuedPosition[]): SectorBreakdown {
   const gross = [...buckets.values()].reduce((sum, bucket) => sum + bucket.gross, 0);
 
   const sectors = [...buckets.values()]
-    .map(({ holdings, ...bucket }) => ({
-      ...bucket,
-      weight: gross === 0 ? 0 : (bucket.gross / gross) * 100,
-      longShare: bucket.gross === 0 ? 0 : bucket.longMv / bucket.gross,
-      symbols: holdings
-        .sort((a, b) => Math.abs(b.marketValue) - Math.abs(a.marketValue))
-        .map((holding) => holding.symbol),
-    }))
+    .map((bucket) => {
+      // Sorted in place once, so `symbols` and `holdings` are the same order —
+      // the drill-down lists what the map draws, top-left first.
+      const holdings = [...bucket.holdings].sort(
+        (a, b) => Math.abs(b.marketValue) - Math.abs(a.marketValue),
+      );
+
+      return {
+        ...bucket,
+        weight: gross === 0 ? 0 : (bucket.gross / gross) * 100,
+        longShare: bucket.gross === 0 ? 0 : bucket.longMv / bucket.gross,
+        dayReturn: bucket.gross === 0 ? 0 : (bucket.dayPnl / bucket.gross) * 100,
+        holdings,
+        symbols: holdings.map((holding) => holding.symbol),
+      };
+    })
     .sort((a, b) => b.gross - a.gross);
 
   return {

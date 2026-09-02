@@ -107,13 +107,25 @@ be.
 PortfolioStats
 MarginWarning
 ConcentrationWarning   any sector over 40% of gross
-Sector exposure grid   gross, long, short, net, weight, with the bar and the 40% line
+Exposure map           every position as a tile, sized by exposure and grouped
+                       into sectors, coloured by its own day return. Cash is a
+                       tile too, in neutral grey
+Concentration          top sector, top three, effective bets (1/HHI), largest
+                       position, long/short/cash, funds, sectors held
+Sector exposure grid   gross, net, weight, P/L, with the bar and the 40% line,
+                       and the day's move drawn against SPY as a hairline
+Holdings drill-down    the positions inside the selected sector, with Finnhub's
+                       industry label. Unfiltered it lists the whole book
 ```
 
 Computed in the browser from positions, quotes and the `securities` table —
 three things the dashboard already holds, so there is no endpoint behind this
-screen and none should appear. **Exit:** clicking a sector opens the ticket on
-its largest holding.
+screen and none should appear. The one exception is a single quote for SPY, for
+the benchmark hairline.
+
+**Selection:** clicking a sector filters the drill-down and dims the rest of the
+map. **Exit:** clicking a holding — in the drill-down or on the map — opens the
+ticket on that symbol.
 
 ### F5 `/admin` — Admin
 

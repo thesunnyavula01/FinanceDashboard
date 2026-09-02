@@ -19,6 +19,11 @@ interface DataGridProps<T> {
   defaultSort?: string;
   defaultDirection?: "asc" | "desc";
   onRowClick?: (row: T) => void;
+  /**
+   * `rowKey` of the row the rest of the screen is filtered to. Marked amber,
+   * because a selection is interface and amber is what interface is drawn in.
+   */
+  selectedKey?: string;
   /** Shown in place of the body when there are no rows. */
   empty?: ReactNode;
 }
@@ -37,6 +42,7 @@ export function DataGrid<T>({
   defaultSort,
   defaultDirection = "desc",
   onRowClick,
+  selectedKey,
   empty = "No rows",
 }: DataGridProps<T>) {
   const [sortKey, setSortKey] = useState<string | undefined>(defaultSort);
@@ -109,24 +115,37 @@ export function DataGrid<T>({
         </tr>
       </thead>
       <tbody>
-        {sorted.map((row) => (
-          <tr
-            key={rowKey(row)}
-            onClick={onRowClick ? () => onRowClick(row) : undefined}
-            className={`row border-b border-line/60 ${
-              onRowClick ? "cursor-pointer hover:bg-panel-hi" : "hover:bg-panel-hi"
-            }`}
-          >
-            {columns.map((col) => (
-              <td
-                key={col.key}
-                className={`px-2 ${col.align === "right" ? "text-right" : "text-left"}`}
-              >
-                {col.render(row)}
-              </td>
-            ))}
-          </tr>
-        ))}
+        {sorted.map((row) => {
+          const key = rowKey(row);
+          const selected = selectedKey !== undefined && key === selectedKey;
+
+          return (
+            <tr
+              key={key}
+              onClick={onRowClick ? () => onRowClick(row) : undefined}
+              aria-current={selected ? "true" : undefined}
+              className={`row border-b border-line/60 hover:bg-panel-hi ${
+                onRowClick ? "cursor-pointer" : ""
+              } ${selected ? "bg-panel-hi" : ""}`}
+            >
+              {columns.map((col, index) => (
+                <td
+                  key={col.key}
+                  className={`px-2 ${col.align === "right" ? "text-right" : "text-left"} ${
+                    // An amber rule down the leading edge. Painted as an inset
+                    // shadow on the first cell rather than a border on the row:
+                    // under border-collapse a <tr>'s own border is not drawn.
+                    selected && index === 0
+                      ? "shadow-[inset_2px_0_0_var(--color-accent)]"
+                      : ""
+                  }`}
+                >
+                  {col.render(row)}
+                </td>
+              ))}
+            </tr>
+          );
+        })}
       </tbody>
     </table>
   );

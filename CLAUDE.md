@@ -598,6 +598,61 @@ on the track itself so crossing it is something the eye catches rather than
 something you compute. Nothing is blocked at 40% and nothing should be —
 watching a concentrated bet play out is most of what a paper season teaches.
 
+### The map is the screen, and the grid is the authority
+
+The bars were the whole screen once, and a screen that draws five rows in a
+viewport built for twenty is not finished. F4 now asks its question at four
+resolutions: the **exposure map** (shape), the **concentration rail** (seven
+figures), the **sector grid** (the numeric authority), and the **holdings
+drill-down** (one level finer than a sector). Everything is still folded in the
+browser from positions, quotes and `securities`, so there is still no endpoint
+behind this screen and none should appear.
+
+**The map is sized by exposure and coloured by the day.** Nobody reads
+"42 / 18 / 11 / 10 / 8" and *sees* a concentrated book; area is read without
+arithmetic, which is the only reason this is a map and not a fourth table.
+`src/lib/treemap.ts` is a squarified treemap (Bruls/Huizing/van Wijk) — pure
+geometry, callers pass pixels, because laying out on a unit square and
+positioning in percentages stretches every tile by the panel's aspect ratio.
+Slice-and-dice through nested flexbox needs no measurement and no arithmetic,
+and on a realistic long tail its worst aspect ratio is 150 against squarify's
+2.3: a barcode, not a map.
+
+**Colour is `dayPnl / |marketValue|`, never the price's day change.** A short is
+a negative `qty`, so `dayPnl` already flips when the price falls and one formula
+stays right in both directions. Colouring by the price's own move would paint a
+winning short red, on the one screen a member visits to understand risk.
+`positionDayReturn()` in `src/lib/sectors.ts` is the single definition, shared
+by the tiles and by the drill-down's Day % column, because the two are on screen
+together. It returns `null` — a neutral tile and a `—` — when there is no
+previous close, which is a different thing from a flat day.
+
+**Cash is a tile.** It is not exposure and is deliberately absent from
+`sectorBreakdown`, but a member who is 60% cash and sees a full map concludes
+they are fully invested. It sits in neutral panel grey, so it reads as the
+absence of a bet rather than a flat one.
+
+**Effective bets** is the inverse Herfindahl over the sector weights,
+`1 / Σ(wᵢ²)`. Six sectors with one of them at 80% is not six bets, and this is
+the figure that says so. The panel prints what an even split would read, because
+the number means nothing without its own baseline.
+
+**Clicking a sector selects it; it no longer opens the ticket.** It filters the
+drill-down and dims the rest of the map. The old behaviour jumped to the ticket
+on the sector's *largest* holding, which was a guess about which symbol the
+member meant — the drill-down lets them pick it, and its `industry` column
+(free from `securities`, and rendered nowhere else in the app) is what tells six
+semiconductor names apart from a diversified technology sleeve.
+
+**The layout has two height regimes and needs both.** At `xl` the page height is
+definite, because a column flex container with `height: auto` sizes a `flex-1`
+child to its *max-content* — so the concentration rail's metrics would otherwise
+set the height of every other panel and the page would run to twice the
+viewport. `min-h-0` does not help; that is a minimum, and this is max-content
+sizing. Below `xl` the columns stack into four full-width panels, holding those
+to the viewport would crush them, so the height goes back to a floor and
+`<main>` scrolls.
+
 ---
 
 ## Leaderboard

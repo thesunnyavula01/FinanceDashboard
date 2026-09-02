@@ -1,4 +1,5 @@
 import { useNavigate } from "react-router-dom";
+import { formatContract } from "@/lib/symbols";
 import { Panel } from "@/components/terminal/Panel";
 import { DataGrid, type Column } from "@/components/terminal/DataGrid";
 import { MarginWarning, PortfolioStats } from "@/components/terminal/PortfolioStats";
@@ -43,11 +44,18 @@ export function Positions() {
     {
       key: "symbol",
       header: "Sym",
-      width: "5.5rem",
+      width: "10rem",
       sortValue: (r) => r.symbol,
       render: (r) => (
         <span className="flex items-center gap-1.5">
-          <span className="num font-medium text-ink">{r.symbol}</span>
+          {/*
+            A contract is shown as a contract — "AAPL 16JAN26 150C" rather than
+            AAPL260116C00150000. The stored symbol is what settles the money and
+            what the API takes, so it stays one hover away rather than lost.
+          */}
+          <span className="num font-medium text-ink" title={r.symbol}>
+            {formatContract(r.symbol)}
+          </span>
           {r.isShort && (
             <span className="label text-loss" title="Short position">
               S

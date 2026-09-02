@@ -246,6 +246,44 @@ Sides: `BUY`, `SELL`, `SHORT`, `COVER`. Order entry accepts either a share count
 `POST /api/portfolio/snapshot` runs the job on demand for officers, which is how verification step 7
 is carried out. No migration was needed — both tables have existed since `0001_init.sql`.
 
+### Phase 8 — Derivatives and crypto on F2
+
+Trade **crypto** and **long options** beside equities, without disturbing the equity path or
+thickening the screen. Alpaca covers both on the free Basic key already in use — no second provider,
+no second rate-limit budget.
+
+**Built**, in two halves. 8a is the plumbing both classes share plus crypto; 8b is options.
+
+Load-bearing decisions, each of which had a cheaper alternative that was rejected:
+
+- **Asset class is derived from the symbol, never stored.** A slash means crypto, a fifteen-character
+  OCC tail means an option. Collision is impossible — Alpaca writes class shares with a dot — so this
+  buys a new asset class with no backfill, no uniqueness-key change and no replay drift.
+- **`multiplier` is one column defaulting to 1.** Storing an option's premium pre-multiplied needs no
+  DDL and makes the blotter print 525.00 for a contract the chain prints at 5.25. Two screens
+  disagreeing about one number is the failure this codebase is written to prevent.
+- **Long-only options, cash-settled at expiry.** A flat 1.5x Reg T multiplier is not a margin model
+  for a naked short call. Auto-exercise can fail for want of cash; cash settlement always succeeds
+  and produces the same P/L.
+- **24/7 costs one cron, not two.** The sweep widened to every minute and gates each order on its own
+  class. A second crypto-only cron would overlap, and the loser of a race on a PENDING row would
+  write REJECTED over an order that had just filled.
+
+Three things the live API said that the research did not:
+
+- **A crypto daily bar is stamped 00:00Z, not 05:00Z.** Reading it through `exchangeDate()` — right
+  for every other bar in the app — dates every crypto close a session early, silently.
+- **There are no greeks and no implied volatility on a free options key**, under any feed parameter;
+  `feed=opra` answers 403. The planned Δ and IV chain columns were dropped rather than faked.
+- **`expiration_date_lte` defaults to next weekend**, so a request for a year of expirations answers
+  with one date and looks like a thin underlying rather than a missing parameter.
+
+One bug the new tests caught before anything ran: `resolveQuantity()` converted a dollar amount at the
+premium rather than the contract cost, so `$300 of a $5.25 option` was 57 contracts instead of 0.
+
+`0006_derivatives.sql` is written and **not yet applied**. Until it is, `/api/portfolio` answers 500
+and F1, F2 and F3 are dark — the same deliberate hard cutover as 0005.
+
 ---
 
 ## Critical files
@@ -260,6 +298,10 @@ worker/market/provider.ts          -- swappable data-provider interface
 worker/market/alpaca.ts            -- snapshots, bars, clock, assets
 worker/market/finnhub.ts           -- profile2 → sector
 worker/market/sectors.ts           -- finnhubIndustry → GICS-11 map
+worker/market/symbols.ts           -- the classifier: OCC parse, class, multiplier
+worker/market/{crypto,options}.ts  -- the two new adapters
+worker/market/router.ts            -- one PriceProvider over three classes
+worker/orders/expiry.ts            -- cash settlement, chained before the snapshot
 worker/routes/{auth,quotes,orders,portfolio,leaderboard,admin}.ts
 src/lib/{supabase,format}.ts
 src/hooks/useQuotes.ts             -- TanStack Query, 20s interval
@@ -279,6 +321,24 @@ src/routes/{Login,Dashboard,Trade,Leaderboard,Sectors,Admin}.tsx
 7. Manually invoke the scheduled handler → snapshot rows written; re-run → no duplicates.
 8. `wrangler deploy` → repeat 1–3 against the live URL; confirm via DevTools that no Alpaca, Finnhub,
    or service-role key appears in any client bundle or network request.
+
+### Phase 8
+
+9. Apply `0006_derivatives.sql`. **Check which editor tab has focus before pressing Run** — it runs
+   the focused one, and "Success. No rows returned" is what a script you did not mean to run also
+   says. Verify against `pg_proc`, not the success message.
+10. Confirm no regression first: buy $500 of AAPL, check cash, position and blotter are exactly as
+    before. Every existing row is `multiplier = 1`; if anything moved, stop.
+11. Crypto: buy $250 of `BTC/USD`, confirm a fractional position, then place the same order **on a
+    weekend** and confirm it fills rather than queues. Rest a GTC limit far from the market and
+    confirm the sweep leaves it and the reservation shows in the stat strip.
+12. Options: pick OPTION on F2, type AAPL, click a strike. Confirm the cost is `premium × 100`, the
+    blotter's price is the **premium**, and F1 renders `AAPL 16JAN26 150C` with the raw OCC on hover.
+13. Confirm SHORT is refused on a contract and on a pair, each with a sentence naming why.
+14. Expiry: with a contract expiring today in a scratch portfolio, run the nightly branch. Confirm an
+    `EXPIRE` row at intrinsic and the position gone. Then void an unrelated trade in that portfolio
+    and confirm `rebuild_portfolio()` reproduces the same cash — this is the check that catches the
+    multiplier being missed in the replay.
 
 ## Open items (not blocking)
 

@@ -254,22 +254,51 @@ test("every security-definer function is revoked from anon and authenticated", (
 });
 
 /** The body of a function, from its CREATE to the start of the next one. */
-function bodyOf(sql: string, name: string): string {
+function bodyOf(sql: string, name: string): string | null {
   const start = sql.indexOf(`create or replace function ${name}(`);
-  assert.notEqual(start, -1, `${name}() not found`);
+  if (start === -1) return null;
 
   const next = sql.indexOf("create or replace function ", start + 1);
   return sql.slice(start, next === -1 ? undefined : next);
 }
 
-/** Which way each order side moves cash, read out of a function body. */
-function cashDirections(body: string): Record<string, string> {
-  const markers = [
-    { side: "BUY", at: body.search(/=\s*'BUY'/) },
-    { side: "SELL", at: body.search(/=\s*'SELL'/) },
-    { side: "SHORT", at: body.search(/=\s*'SHORT'/) },
-    { side: "COVER", at: body.search(/else\s*--\s*COVER/) },
-  ].sort((a, b) => a.at - b.at);
+/**
+ * The definition that is actually live: the last one, reading the migrations in
+ * order, since a later file replaces an earlier one.
+ *
+ * Reading a fixed filename was fine while each function was defined once. The
+ * moment 0006 recreated place_order() it stopped being fine — the drift alarm
+ * would have gone on watching a definition the database no longer runs, which
+ * is worse than no alarm because it reports green.
+ */
+function liveBodyOf(name: string): string {
+  let found: string | null = null;
+
+  for (const file of FILES) {
+    const body = bodyOf(readFileSync(MIGRATIONS_DIR + file, "utf8"), name);
+    if (body) found = body;
+  }
+
+  assert.ok(found, `${name}() is not defined in any migration`);
+  return found;
+}
+
+/**
+ * Which way each order side moves cash, read out of a function body.
+ *
+ * `sides` is passed in because the two functions do not carry the same set:
+ * only the replay knows about EXPIRE, since nothing places an expiry as an
+ * order.
+ */
+function cashDirections(body: string, sides: readonly string[]): Record<string, string> {
+  const markers = sides
+    .map((side) => ({
+      side,
+      // COVER is always the trailing `else`, so it has no test of its own to
+      // search for.
+      at: side === "COVER" ? body.search(/else\s*--\s*COVER/) : body.search(new RegExp(`=\\s*'${side}'`)),
+    }))
+    .sort((a, b) => a.at - b.at);
 
   const directions: Record<string, string> = {};
 
@@ -292,20 +321,26 @@ function cashDirections(body: string): Record<string, string> {
  * one the member actually traded into.
  */
 test("the replay and place_order agree on which way each side moves cash", () => {
-  const trading = readFileSync(MIGRATIONS_DIR + "0003_resting_orders.sql", "utf8");
-  const adminSql = readFileSync(MIGRATIONS_DIR + "0005_admin.sql", "utf8");
+  const ORDER_SIDES = ["BUY", "SELL", "SHORT", "COVER"] as const;
 
-  const live = cashDirections(bodyOf(trading, "place_order"));
-  const replay = cashDirections(bodyOf(adminSql, "rebuild_portfolio"));
+  const live = cashDirections(liveBodyOf("place_order"), ORDER_SIDES);
+  const replay = cashDirections(liveBodyOf("rebuild_portfolio"), [...ORDER_SIDES, "EXPIRE"]);
 
   // Buying and covering pay out; selling and shorting take in.
   assert.deepEqual(live, { BUY: "-", SELL: "+", SHORT: "+", COVER: "-" });
-  assert.deepEqual(replay, live);
+
+  for (const side of ORDER_SIDES) {
+    assert.equal(replay[side], live[side], `the replay moves cash the other way on ${side}`);
+  }
+
+  // Settlement is a sale at intrinsic value, so it pays in like one. A worthless
+  // contract settles at zero, which moves cash by zero rather than not at all —
+  // the direction is still the direction.
+  assert.equal(replay.EXPIRE, "+");
 });
 
 test("the replay starts from the portfolio's own baseline, not the season's", () => {
-  const adminSql = readFileSync(MIGRATIONS_DIR + "0005_admin.sql", "utf8");
-  const replay = bodyOf(adminSql, "rebuild_portfolio");
+  const replay = liveBodyOf("rebuild_portfolio");
 
   // Reading the season's starting cash here would re-fund every member at
   // whatever an officer last typed into the console, which is exactly the bug
@@ -315,10 +350,117 @@ test("the replay starts from the portfolio's own baseline, not the season's", ()
 });
 
 test("signup stamps the baseline onto the portfolio it creates", () => {
-  const adminSql = readFileSync(MIGRATIONS_DIR + "0005_admin.sql", "utf8");
-  const bootstrap = bodyOf(adminSql, "bootstrap_member");
-
   // A portfolio with no baseline cannot report a return, and the column is
   // NOT NULL, so this is also what stops signup failing outright.
-  assert.match(bootstrap, /insert into portfolios \(season_id, user_id, cash, starting_cash\)/);
+  assert.match(
+    liveBodyOf("bootstrap_member"),
+    /insert into portfolios \(season_id, user_id, cash, starting_cash\)/,
+  );
+});
+
+/**
+ * The contract multiplier, checked everywhere money is made out of a quantity.
+ *
+ * An option is a hundred shares. Every product below was `qty * price` before
+ * 0006 and is right for a stock either way, so a missed one is invisible until
+ * somebody trades a contract — and then it is wrong by two orders of magnitude
+ * in a column nobody re-derives.
+ */
+test("every notional the SQL computes carries the contract multiplier", () => {
+  const sites: { fn: string; pattern: RegExp }[] = [
+    // The four fills, plus the replay's single shared expression.
+    { fn: "place_order", pattern: /v_notional\s*:=\s*round\(p_qty \* v_multiplier \* p_price, 2\)/ },
+    {
+      fn: "rebuild_portfolio",
+      pattern: /v_notional\s*:=\s*round\(v_trade\.qty \* v_mult \* v_trade\.price, 2\)/,
+    },
+    {
+      fn: "settle_option_expiry",
+      pattern: /v_notional\s*:=\s*round\(v_position\.qty \* v_position\.multiplier \* p_intrinsic, 2\)/,
+    },
+  ];
+
+  for (const site of sites) {
+    assert.match(liveBodyOf(site.fn), site.pattern, `${site.fn}() lost the multiplier`);
+  }
+
+  // place_order() writes four notionals, one per side, and every one of them
+  // has to carry it — three out of four is the worst possible outcome.
+  const fills = liveBodyOf("place_order").match(/v_notional\s*:=\s*round\(/g) ?? [];
+  const multiplied = liveBodyOf("place_order").match(/v_notional\s*:=\s*round\(p_qty \* v_multiplier/g) ?? [];
+  assert.equal(fills.length, 4, "place_order() should compute exactly one notional per side");
+  assert.equal(multiplied.length, 4, "a side is computing its notional without the multiplier");
+});
+
+test("every market value the SQL sums carries the contract multiplier", () => {
+  // A book holding stock and contracts is valued in one pass, so the multiplier
+  // has to come off the position rather than off the caller.
+  assert.match(liveBodyOf("place_order"), /sum\(post\.qty \* post\.mult \* post\.mark\)/);
+  assert.match(liveBodyOf("place_order"), /sum\(-post\.qty \* post\.mult \* post\.mark\)/);
+
+  for (const fn of ["queue_order", "cancel_pending_order"]) {
+    assert.match(
+      liveBodyOf(fn),
+      /sum\(abs\(pos\.qty\) \* pos\.multiplier \* pos\.avg_cost\)/,
+      `${fn}() sizes margin without the multiplier`,
+    );
+  }
+});
+
+test("realised profit is money, so it carries the multiplier too", () => {
+  const live = liveBodyOf("place_order");
+  // SELL and COVER are the only two sides that realise anything.
+  assert.match(live, /v_realized\s*:=\s*round\(\(p_price - v_prev_avg\) \* p_qty \* v_multiplier, 2\)/);
+  assert.match(live, /v_realized\s*:=\s*round\(\(v_prev_avg - p_price\) \* p_qty \* v_multiplier, 2\)/);
+
+  const replay = liveBodyOf("rebuild_portfolio");
+  assert.equal(
+    (replay.match(/v_realized\s*:=\s*round\([^;]*\* v_mult, 2\)/g) ?? []).length,
+    3,
+    "SELL, EXPIRE and COVER each realise, and each needs the multiplier",
+  );
+});
+
+/**
+ * The SQL mirror of allowsShort() in worker/market/symbols.ts.
+ *
+ * The Worker refuses a short on a contract or a coin first and with a better
+ * sentence. This is the line underneath it, at the level that actually moves
+ * money — and it is only worth having if it agrees with the classifier it
+ * mirrors.
+ */
+test("the SQL knows which symbols can be sold short, and both order paths ask", () => {
+  const guard = liveBodyOf("symbol_allows_short");
+
+  assert.match(guard, /not like '%\/%'/, "a slash means a crypto pair");
+  assert.match(
+    guard,
+    /\^\[A-Z\]\[A-Z0-9\]\{0,5\}\[0-9\]\{6\}\[CP\]\[0-9\]\{8\}\$/,
+    "the OCC tail is what marks an option contract",
+  );
+
+  for (const fn of ["place_order", "queue_order"]) {
+    assert.match(
+      liveBodyOf(fn),
+      /v_side in \('SHORT', 'COVER'\) and not symbol_allows_short\(v_symbol\)/,
+      `${fn}() would let a member short a contract`,
+    );
+  }
+});
+
+test("expiry settles a long position and releases what it was holding", () => {
+  const settle = liveBodyOf("settle_option_expiry");
+
+  // Same lock, same order as place_order(), or the two deadlock against each
+  // other the first time a member trades during their own expiry.
+  assert.match(settle, /from portfolios where id = v_owner for update/);
+  assert.match(settle, /from positions where id = p_position_id for update/);
+
+  // A short option cannot exist here, and settling one would book the profit
+  // backwards rather than fail.
+  assert.match(settle, /if v_position\.qty <= 0 then/);
+
+  // A working order against a contract that no longer exists would hold its
+  // reservation forever.
+  assert.match(settle, /update pending_orders[\s\S]*?reserved_cash = 0,\s*reserved_qty = 0/);
 });

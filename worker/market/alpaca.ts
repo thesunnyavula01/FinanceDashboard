@@ -541,15 +541,30 @@ export function alpacaFromEnv(env: {
   ALPACA_API_SECRET_KEY?: string;
   ALPACA_DATA_FEED?: string;
 }): AlpacaProvider {
+  return new AlpacaProvider(alpacaConfigFromEnv(env));
+}
+
+/**
+ * The credentials on their own, for the crypto and options providers.
+ *
+ * One Alpaca key covers all three asset classes — there is no second
+ * subscription and no second secret — so the same check produces the same
+ * message whichever provider is being built.
+ */
+export function alpacaConfigFromEnv(env: {
+  ALPACA_API_KEY_ID?: string;
+  ALPACA_API_SECRET_KEY?: string;
+  ALPACA_DATA_FEED?: string;
+}): AlpacaConfig {
   if (!env.ALPACA_API_KEY_ID || !env.ALPACA_API_SECRET_KEY) {
     throw new MarketConfigError(
       "Market data is not configured. Set ALPACA_API_KEY_ID and ALPACA_API_SECRET_KEY.",
     );
   }
 
-  return new AlpacaProvider({
+  return {
     keyId: env.ALPACA_API_KEY_ID,
     secretKey: env.ALPACA_API_SECRET_KEY,
     feed: env.ALPACA_DATA_FEED || "iex",
-  });
+  };
 }

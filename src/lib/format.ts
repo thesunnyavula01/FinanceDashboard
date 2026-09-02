@@ -122,3 +122,23 @@ export function stampET(value: string | Date): string {
   if (Number.isNaN(date.getTime())) return "—";
   return stampFormat.format(date).replace(",", "");
 }
+
+/**
+ * A price with enough decimals to reconcile against its own total.
+ *
+ * `money()` is two decimals, which is right for a share and wrong for an option
+ * premium: a midpoint of 0.135 prints as 0.14, and the contract multiplier then
+ * turns that half-cent into a dollar the estimate beside it does not agree
+ * with. Two numbers on screen disagreeing about the same order is the failure
+ * this app is written to avoid, so a premium that is not exact in cents shows
+ * the third decimal — and everything that is stays at two, because 0.140 reads
+ * as false precision.
+ */
+export function premium(value: Numeric | null | undefined, multiplier = 1): string {
+  const n = toNumber(value);
+  if (multiplier <= 1) return money(n);
+  const cents = n * 100;
+  return Number.isInteger(Math.round(cents * 1000) / 1000) && Math.abs(cents - Math.round(cents)) < 1e-9
+    ? money(n)
+    : n.toLocaleString("en-US", { minimumFractionDigits: 3, maximumFractionDigits: 3 });
+}

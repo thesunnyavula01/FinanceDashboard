@@ -130,7 +130,7 @@ export async function loadPortfolio(
 
   const { data: rows, error: positionsError } = await supabase
     .from("positions")
-    .select("symbol, qty, avg_cost")
+    .select("symbol, qty, avg_cost, multiplier")
     .eq("portfolio_id", portfolio.id);
 
   if (positionsError) throw positionsError;
@@ -147,6 +147,7 @@ export async function loadPortfolio(
       symbol: row.symbol as string,
       qty: Number(row.qty),
       avgCost: Number(row.avg_cost),
+      multiplier: Number(row.multiplier ?? 1),
     })),
   };
 }

@@ -140,6 +140,12 @@ export interface TradableAsset {
   fractionable: boolean;
   shortable: boolean;
   easyToBorrow: boolean;
+  /**
+   * The smallest order the venue will take, where the venue says. Alpaca
+   * publishes it per crypto pair and not at all for equities, where one share
+   * is the floor and `fractionable` already carries that.
+   */
+  minOrderSize?: number;
 }
 
 export interface SecurityProfile {
@@ -149,7 +155,7 @@ export interface SecurityProfile {
   sector: string;
   /** The provider's own, finer-grained label, kept for display and debugging. */
   industry: string | null;
-  assetType: "STOCK" | "ETF";
+  assetType: "STOCK" | "ETF" | "CRYPTO" | "OPTION";
   logoUrl: string | null;
 }
 

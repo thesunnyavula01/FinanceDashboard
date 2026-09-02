@@ -67,6 +67,7 @@ export const ALL_SECTORS = [
   "Real Estate",
   "Materials",
   "ETF / Fund",
+  "Crypto",
   "Unclassified",
 ] as const;
 

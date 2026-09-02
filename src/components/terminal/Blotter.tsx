@@ -1,8 +1,9 @@
 import { useBlotter } from "@/hooks/usePortfolio";
 import { money, moneySigned, shares, stampET } from "@/lib/format";
-import type { OrderSide, Trade } from "@/lib/api";
+import type { Trade, TradeSide } from "@/lib/api";
+import { formatContract } from "@/lib/symbols";
 import { DataGrid, type Column } from "./DataGrid";
-import { Panel } from "./Panel";
+import { Panel, type PanelTab } from "./Panel";
 import { Value } from "./Value";
 
 /**
@@ -19,14 +20,29 @@ import { Value } from "./Value";
  * opening trade reads like a broken calculation.
  */
 
-const SIDE_COLOR: Record<OrderSide, string> = {
+const SIDE_COLOR: Record<TradeSide, string> = {
   BUY: "text-ink",
   SELL: "text-ink",
   SHORT: "text-loss",
   COVER: "text-gain",
+  // Dimmed, because nobody placed it. An expiry is something that happened to
+  // the member rather than something they did, and the blotter should read
+  // that way at a glance.
+  EXPIRE: "text-ink-dim",
 };
 
-export function Blotter({ limit = 100 }: { limit?: number }) {
+export function Blotter({
+  limit = 100,
+  tabs,
+  activeTab,
+  onTabChange,
+}: {
+  limit?: number;
+  /** Present when the blotter shares its panel with another view — see F2. */
+  tabs?: PanelTab[];
+  activeTab?: string;
+  onTabChange?: (id: string) => void;
+}) {
   const { trades, note, isLoading, isError } = useBlotter(limit);
 
   const columns: Column<Trade>[] = [
@@ -40,9 +56,16 @@ export function Blotter({ limit = 100 }: { limit?: number }) {
     {
       key: "symbol",
       header: "Sym",
-      width: "5rem",
+      width: "9.5rem",
       sortValue: (trade) => trade.symbol,
-      render: (trade) => <span className="num text-ink">{trade.symbol}</span>,
+      // A contract is shown as a contract. The raw OCC symbol is what settles
+      // the money and what the API takes, so it stays one hover away rather
+      // than being lost.
+      render: (trade) => (
+        <span className="num text-ink" title={trade.symbol}>
+          {formatContract(trade.symbol)}
+        </span>
+      ),
     },
     {
       key: "side",
@@ -99,14 +122,19 @@ export function Blotter({ limit = 100 }: { limit?: number }) {
   ];
 
   // Closing fills only — an opening trade realises nothing, so counting it
-  // would make the total look diluted rather than large.
+  // would make the total look diluted rather than large. An expiry closes a
+  // position as surely as a sale does, and a contract that expired worthless is
+  // the one loss a member most needs counted.
   const realised = trades
-    .filter((trade) => trade.side === "SELL" || trade.side === "COVER")
+    .filter((trade) => trade.side !== "BUY" && trade.side !== "SHORT")
     .reduce((sum, trade) => sum + Number(trade.realizedPnl), 0);
 
   return (
     <Panel
       title="Blotter"
+      tabs={tabs}
+      activeTab={activeTab}
+      onTabChange={onTabChange}
       meta={
         isError ? (
           <span className="text-loss">Unavailable</span>

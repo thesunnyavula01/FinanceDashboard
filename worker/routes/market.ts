@@ -1,9 +1,11 @@
 import { Hono } from "hono";
 import { requireAdmin, requireAuth, type AuthedBindings } from "../middleware/auth.ts";
+import { loadChain } from "../market/chain.ts";
 import { marketClock } from "../market/clock.ts";
 import { describeMarketError } from "../market/provider.ts";
 import { parseSymbols } from "../market/quotes.ts";
 import { getSecurities } from "../market/securities.ts";
+import { ASSET_CLASSES, EQUITY_SYMBOL, type AssetClass } from "../market/symbols.ts";
 import { searchSymbols, syncUniverse, universeMeta } from "../market/universe.ts";
 
 export const market = new Hono<AuthedBindings>();
@@ -36,11 +38,18 @@ market.get("/clock", async (c) => {
 market.get("/symbols", async (c) => {
   const query = (c.req.query("q") ?? "").trim();
   const limit = Math.min(Math.max(Number(c.req.query("limit")) || 20, 1), 50);
+  // Which instrument the ticket is on. Absent means "any", which is what the
+  // command bar wants; the ticket always names one, so a crypto search cannot
+  // return a stock and an option's underlying search cannot return a coin.
+  const raw = (c.req.query("class") ?? "").trim().toUpperCase();
+  const assetClass = (ASSET_CLASSES as readonly string[]).includes(raw)
+    ? (raw as AssetClass)
+    : undefined;
 
   if (query.length === 0) return c.json({ results: [], warming: false });
 
   try {
-    const found = await searchSymbols(c.env, query, limit);
+    const found = await searchSymbols(c.env, query, limit, assetClass);
 
     if (found.warming) {
       c.executionCtx.waitUntil(
@@ -104,4 +113,45 @@ market.post("/universe/sync", requireAdmin, async (c) => {
 market.get("/universe", async (c) => {
   const meta = await universeMeta(c.env);
   return c.json(meta ?? { count: 0, syncedAt: null });
+});
+
+/**
+ * GET /api/market/chain?underlying=AAPL&expiration=2026-09-18
+ *
+ * One underlying's option chain: every expiration it lists, and one of them
+ * priced. Omit `expiration` for the front month, which is what the panel opens
+ * on and what the club mostly trades.
+ *
+ * This is the endpoint that does not exist for equities and could not exist for
+ * options as a KV list: the contract universe is hundreds of thousands of rows,
+ * so it is fetched per underlying on demand. The cache in `chain.ts` is what
+ * keeps thirty members watching the same expiry down to two upstream calls a
+ * minute.
+ *
+ * `underlyingPrice` comes off the shared quote cache rather than a fresh
+ * request, so the header on this panel and the price on the positions grid
+ * cannot disagree about spot.
+ */
+market.get("/chain", async (c) => {
+  const underlying = (c.req.query("underlying") ?? "").trim().toUpperCase();
+  const expiration = c.req.query("expiration")?.trim() || undefined;
+
+  if (!EQUITY_SYMBOL.test(underlying)) {
+    return c.json({ error: "Enter the underlying ticker, like AAPL." }, 400);
+  }
+
+  if (expiration !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(expiration)) {
+    return c.json({ error: "An expiration is a date, like 2026-09-18." }, 400);
+  }
+
+  try {
+    const chain = await loadChain(c.env, underlying, expiration, (p) =>
+      c.executionCtx.waitUntil(p),
+    );
+    return c.json(chain);
+  } catch (err) {
+    const { message, status } = describeMarketError(err);
+    if (status === 502) console.error("Chain load failed:", err);
+    return c.json({ error: message }, status);
+  }
 });

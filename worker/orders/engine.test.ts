@@ -1,12 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import {
   applyFill,
   buyingPowerAfter,
   marketValues,
   REG_T_MARGIN_MULTIPLIER,
+  reserveFor,
   resolveQuantity,
   round,
   tradingWindow,
@@ -433,6 +434,29 @@ const MIGRATION = readFileSync(
   "utf8",
 );
 
+/**
+ * The place_order() body that is actually live.
+ *
+ * It was defined once, in 0002, and then recreated by 0003 and again by 0006.
+ * Reading a fixed filename would leave the assertions below inspecting a
+ * definition the database has not run since — green, and meaningless.
+ */
+const LIVE_PLACE_ORDER = (() => {
+  const dir = fileURLToPath(new URL("../../supabase/migrations/", import.meta.url));
+  let body: string | null = null;
+
+  for (const file of readdirSync(dir).filter((f) => f.endsWith(".sql")).sort()) {
+    const sql = readFileSync(dir + file, "utf8");
+    const start = sql.indexOf("create or replace function place_order(");
+    if (start === -1) continue;
+    const next = sql.indexOf("create or replace function ", start + 1);
+    body = sql.slice(start, next === -1 ? undefined : next);
+  }
+
+  assert.ok(body, "place_order() is not defined in any migration");
+  return body;
+})();
+
 test("the SQL and this engine agree on the Reg T multiplier", () => {
   const match = MIGRATION.match(/reg_t_margin_multiplier\(\)[\s\S]*?select\s+([\d.]+)::numeric/);
   assert.ok(match, "reg_t_margin_multiplier() should still be a one-line SQL function");
@@ -448,12 +472,12 @@ test("the SQL takes a row lock before it reads the balance", () => {
   // once must not both read the same cash balance. It comes entirely from this
   // clause, so its disappearance should break the build.
   assert.match(
-    MIGRATION,
+    LIVE_PLACE_ORDER,
     /from portfolios p[\s\S]*?for update of p/,
     "place_order() must select the portfolio FOR UPDATE before touching cash",
   );
   assert.doesNotMatch(
-    MIGRATION,
+    LIVE_PLACE_ORDER,
     /for update of p[\s\S]*?for update of p/,
     "there should be exactly one portfolio lock, taken once at the top",
   );
@@ -461,14 +485,168 @@ test("the SQL takes a row lock before it reads the balance", () => {
 
 test("the SQL rejects the same four sides this engine does", () => {
   for (const code of ["FC001", "FC002", "FC003", "FC004", "FC005", "FC006"]) {
-    assert.match(MIGRATION, new RegExp(`errcode = '${code}'`), `${code} is no longer raised`);
+    assert.match(LIVE_PLACE_ORDER, new RegExp(`errcode = '${code}'`), `${code} is no longer raised`);
   }
 });
 
 test("the SQL checks buying power only on the opening sides", () => {
   assert.match(
-    MIGRATION,
+    LIVE_PLACE_ORDER,
     /v_side in \('BUY', 'SHORT'\) and v_buying_power < 0/,
     "the closing sides must stay unblocked, or an underwater member is trapped",
   );
+});
+
+// -----------------------------------------------------------------------------
+// Three asset classes, one engine.
+//
+// The multiplier defaults to 1, so every test above this line describes the
+// equity path unchanged. These describe what a contract and a coin do
+// differently — and the first thing they must do is nothing, for a stock.
+// -----------------------------------------------------------------------------
+
+const CALL = "AAPL260116C00150000";
+
+test("a contract costs a hundred times its premium", () => {
+  const bought = fill(applyFill(null, CALL, "BUY", 2, 5.25));
+
+  assert.equal(bought.notional, 1050, "2 contracts x 100 shares x $5.25 of premium");
+  assert.equal(bought.cashDelta, -1050);
+  // avgCost stays the premium. It is the price the chain quotes and the price
+  // the blotter prints, and those two must not disagree.
+  assert.equal(bought.position?.avgCost, 5.25);
+  assert.equal(bought.position?.qty, 2);
+  assert.equal(bought.position?.multiplier, 100);
+});
+
+test("realised profit on a contract is money, so it is multiplied too", () => {
+  const held: Position = { symbol: CALL, qty: 2, avgCost: 5.25, multiplier: 100 };
+  const sold = fill(applyFill(held, CALL, "SELL", 2, 7.4));
+
+  // $2.15 of premium x 100 x 2 contracts. Getting this wrong understates a
+  // member's whole season by two orders of magnitude.
+  assert.equal(sold.realizedPnl, 430);
+  assert.equal(sold.cashDelta, 1480);
+});
+
+test("a stock is unchanged by all of this, because its multiplier is one", () => {
+  const explicit = fill(applyFill(null, "NVDA", "BUY", 10, 176.2, 1));
+  const implied = fill(applyFill(null, "NVDA", "BUY", 10, 176.2));
+
+  assert.deepEqual(implied, explicit);
+  assert.equal(implied.notional, 1762);
+});
+
+test("a contract is valued at a hundred times its mark, and a coin at one", () => {
+  const positions: Position[] = [
+    { symbol: CALL, qty: 2, avgCost: 5.25, multiplier: 100 },
+    { symbol: "BTC/USD", qty: 0.5, avgCost: 90_000 },
+  ];
+  const valued = marketValues(positions, { [CALL]: 6, "BTC/USD": 100_000 }, 1000);
+
+  // 2 x 100 x 6 = 1,200 of contracts, plus 0.5 x 100,000 = 50,000 of bitcoin.
+  assert.equal(valued.longMv, 51_200);
+  assert.equal(valued.equity, 52_200);
+});
+
+test("a contract whose multiplier was never stored is still valued as a contract", () => {
+  // Belt and braces for a row written by something that forgot the column: the
+  // symbol says it is a contract, so it is valued as one rather than at 1/100th.
+  const valued = marketValues([{ symbol: CALL, qty: 2, avgCost: 5.25 }], { [CALL]: 6 }, 0);
+  assert.equal(valued.longMv, 1200);
+});
+
+test("buying power is checked against the contract cost, not the premium", () => {
+  const cash = 900;
+  const outcome = applyFill(null, CALL, "BUY", 2, 5.25);
+  const { rejection } = buyingPowerAfter([], cash, fill(outcome), {});
+
+  assert.equal(rejection?.code, "INSUFFICIENT_BUYING_POWER");
+  // $1,050 of contracts against $900. Sizing on the premium would have read
+  // $10.50 and waved it straight through.
+  assert.match(rejection?.message ?? "", /\$1,050\.00/);
+});
+
+test("nothing but an equity can be sold short", () => {
+  for (const symbol of [CALL, "BTC/USD"]) {
+    const shorted = applyFill(null, symbol, "SHORT", 1, 5.25);
+    assert.equal(shorted.ok, false, symbol);
+    assert.equal(shorted.ok === false && shorted.code, "WRONG_SIDE");
+    assert.match(shorted.ok === false ? shorted.message : "", /Short selling is not available/);
+  }
+
+  // The equity path keeps its four sides.
+  assert.equal(applyFill(null, "NVDA", "SHORT", 10, 176.2).ok, true);
+});
+
+test("crypto ignores the clock, and an unreachable calendar cannot close it", () => {
+  const shut: MarketClock = {
+    state: "CLOSED",
+    isOpen: false,
+    label: "Opens Monday 09:30 ET.",
+    nextOpen: null,
+    nextClose: null,
+    authoritative: true,
+  };
+
+  assert.equal(tradingWindow(shut, "BTC/USD"), null, "there is no weekend in crypto");
+  assert.notEqual(tradingWindow(shut, "NVDA"), null);
+  assert.notEqual(tradingWindow(shut, CALL), null, "options keep exchange hours");
+  assert.notEqual(tradingWindow(shut), null, "no symbol means the exchange calendar applies");
+
+  // The estimate is refused for equities because it does not know about
+  // Thanksgiving. Crypto has no holidays for it to be wrong about.
+  const guessing: MarketClock = { ...shut, isOpen: true, authoritative: false };
+  assert.equal(tradingWindow(guessing, "BTC/USD"), null);
+  assert.notEqual(tradingWindow(guessing, "NVDA"), null);
+});
+
+test("options are whole contracts even though the universe never lists them", () => {
+  // `fractionable` arrives undefined for a contract — options are not in the KV
+  // asset list at all — so the floor has to come from the symbol.
+  const resolved = resolveQuantity({ qty: 2.7, price: 5.25, symbol: CALL });
+  assert.deepEqual(resolved, { qty: 2 });
+
+  const tooSmall = resolveQuantity({ notional: 300, price: 5.25, symbol: CALL });
+  assert.equal("ok" in tooSmall && tooSmall.ok, false);
+  // $300 buys 0.57 of a $525 contract. The price quoted back has to be the
+  // contract's, not the premium's, or the sentence reads as nonsense.
+  assert.match(
+    "message" in tooSmall ? tooSmall.message : "",
+    /whole contracts only.*\$525\.00/,
+    "the refusal should quote what one contract costs",
+  );
+});
+
+test("a crypto order below the pair's minimum is refused rather than rounded", () => {
+  const ok = resolveQuantity({ notional: 250, price: 100_000, symbol: "BTC/USD", minSize: 0.0001 });
+  assert.deepEqual(ok, { qty: 0.0025 });
+
+  const dust = resolveQuantity({ notional: 5, price: 100_000, symbol: "BTC/USD", minSize: 0.0001 });
+  assert.equal("ok" in dust && dust.ok, false);
+  assert.match("message" in dust ? dust.message : "", /smallest BTC\/USD order is 0\.0001/);
+});
+
+test("a queued contract reserves what the contract costs", () => {
+  const shares = reserveFor({
+    side: "BUY",
+    orderType: "LIMIT",
+    limitPrice: 6,
+    qty: 2,
+    referencePrice: 5.25,
+    multiplier: 100,
+  });
+
+  // The limit is the cap, so no buffer — but it is a cap on the premium, and
+  // what gets spent is a hundred times that.
+  assert.deepEqual(shares, { cash: 1200, qty: 0 });
+
+  const market = reserveFor({
+    side: "BUY",
+    orderType: "MARKET",
+    qty: 1,
+    referencePrice: 5,
+    multiplier: 100,
+  });
+  assert.deepEqual(market, { cash: 525, qty: 0 }, "500 of contract plus the 5% head-room");
 });

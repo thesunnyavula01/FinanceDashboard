@@ -1,5 +1,6 @@
 import { useCancelOrder, useWorkingOrders } from "@/hooks/usePortfolio";
 import { money, shares, stampET } from "@/lib/format";
+import { hasStop } from "@/lib/api";
 import type { OrderSide, WorkingOrder } from "@/lib/api";
 import { DataGrid, type Column } from "./DataGrid";
 import { Panel } from "./Panel";
@@ -80,10 +81,47 @@ export function WorkingOrders({ marketOpen }: { marketOpen: boolean }) {
         if (order.orderType === "MARKET") {
           return <span className="text-ink-dim">The market to open</span>;
         }
-        const direction = order.side === "BUY" || order.side === "COVER" ? "at or below" : "at or above";
+
+        // A limit waits for the price to come *to* it; a stop waits for the
+        // price to go *through* it. Opposite directions for the same side, so
+        // the wording has to come from the type and not just from the side —
+        // this column is where a member checks they typed what they meant.
+        const paying = order.side === "BUY" || order.side === "COVER";
+
+        if (hasStop(order.orderType)) {
+          // A triggered stop has stopped waiting for its stop. A STOP_LIMIT is
+          // now waiting on its limit; anything else is waiting only for a fill.
+          if (order.triggeredAt) {
+            return order.orderType === "STOP_LIMIT" ? (
+              <span className="text-ink-dim">
+                <span className="text-accent">Triggered</span> · {order.symbol}{" "}
+                {paying ? "at or below" : "at or above"}{" "}
+                <span className="num text-ink">{money(order.limitPrice)}</span>
+              </span>
+            ) : (
+              <span className="text-accent">Triggered — filling at the market</span>
+            );
+          }
+
+          const through = paying ? "at or above" : "at or below";
+          return (
+            <span className="text-ink-dim">
+              {order.symbol} {through}{" "}
+              <span className="num text-ink">{money(order.stopPrice)}</span>
+              {order.orderType === "TRAILING_STOP" && (
+                <span className="text-ink-faint">
+                  {" "}
+                  · trails {order.trailPercent ? `${money(order.trailPercent)}%` : money(order.trailAmount)}
+                </span>
+              )}
+            </span>
+          );
+        }
+
         return (
           <span className="text-ink-dim">
-            {order.symbol} {direction} <span className="num text-ink">{money(order.limitPrice)}</span>
+            {order.symbol} {paying ? "at or below" : "at or above"}{" "}
+            <span className="num text-ink">{money(order.limitPrice)}</span>
           </span>
         );
       },

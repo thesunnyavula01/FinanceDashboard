@@ -4,9 +4,17 @@ import { requireAdmin, requireAuth, type AuthedBindings } from "../middleware/au
 import { ConfigError, serviceClient } from "../lib/supabase.ts";
 import { loadPortfolio, PortfolioError } from "../lib/portfolio.ts";
 import { marketClock } from "../market/clock.ts";
-import { describeMarketError } from "../market/provider.ts";
+import { describeMarketError, exchangeDate } from "../market/provider.ts";
 import { quoteCache } from "../market/quotes.ts";
+import { lookupContract } from "../market/chain.ts";
 import { lookupSymbol } from "../market/universe.ts";
+import {
+  allowsShort,
+  classify,
+  formatContract,
+  isTradableSymbol,
+  multiplierFor,
+} from "../market/symbols.ts";
 import { sweepRestingOrders } from "../orders/sweep.ts";
 import {
   applyFill,
@@ -15,7 +23,11 @@ import {
   isMarketable,
   ORDER_SIDES,
   ORDER_TYPES,
+  checkStopPlacement,
+  hasLimit,
+  hasStop,
   reserveFor,
+  trailingStopFrom,
   resolveQuantity,
   TIME_IN_FORCE,
   tradingWindow,
@@ -59,6 +71,9 @@ interface OrderBody {
   side?: unknown;
   orderType?: unknown;
   limitPrice?: unknown;
+  stopPrice?: unknown;
+  trailAmount?: unknown;
+  trailPercent?: unknown;
   qty?: unknown;
   notional?: unknown;
   timeInForce?: unknown;
@@ -121,7 +136,7 @@ orders.post("/", async (c) => {
     typeof body.timeInForce === "string" ? body.timeInForce.trim().toUpperCase() : "DAY"
   ) as TimeInForce;
 
-  if (!/^[A-Z][A-Z0-9.-]{0,9}$/.test(symbol)) {
+  if (!isTradableSymbol(symbol)) {
     return c.json({ error: "That is not a ticker we recognise.", code: "INVALID_ORDER" }, 400);
   }
   if (!ORDER_SIDES.includes(side)) {
@@ -137,17 +152,65 @@ orders.post("/", async (c) => {
     return c.json({ error: "Time in force must be DAY or GTC.", code: "INVALID_ORDER" }, 400);
   }
 
+  const assetClass = classify(symbol);
+  // Replaced below for a contract, whose real multiplier comes from Alpaca. A
+  // contract adjusted by a split can be 1000 shares rather than 100, and the
+  // constant would misprice it by an order of magnitude in the direction that
+  // costs the member money.
+  let multiplier = multiplierFor(symbol);
+
+  // A DAY order dies at the close, and crypto has no close. Rather than invent
+  // one — midnight where? — a working crypto order is good until cancelled, and
+  // it is the only kind that can rest anyway: with the market always open, a
+  // crypto market order fills immediately and only a limit ever waits.
+  if (assetClass === "CRYPTO" && timeInForce === "DAY") {
+    return c.json(
+      {
+        error: `${symbol} trades around the clock, so there is no close for a day order to expire at. Use good-til-cancelled.`,
+        code: "INVALID_ORDER",
+      },
+      400,
+    );
+  }
+
   const limitPrice =
     body.limitPrice === undefined || body.limitPrice === null || body.limitPrice === ""
       ? null
       : Number(body.limitPrice);
 
-  if (orderType === "LIMIT" && !(Number.isFinite(limitPrice) && (limitPrice as number) > 0)) {
+  const num = (raw: unknown): number | null =>
+    raw === undefined || raw === null || raw === "" ? null : Number(raw);
+
+  const stopPrice = num(body.stopPrice);
+  const trailAmount = num(body.trailAmount);
+  const trailPercent = num(body.trailPercent);
+
+  if (hasLimit(orderType) && !(Number.isFinite(limitPrice) && (limitPrice as number) > 0)) {
     return c.json({ error: "A limit order needs a limit price.", code: "INVALID_ORDER" }, 400);
   }
-  if (orderType === "MARKET" && limitPrice !== null) {
+  if (!hasLimit(orderType) && limitPrice !== null) {
     return c.json(
-      { error: "A market order cannot carry a limit price.", code: "INVALID_ORDER" },
+      {
+        error: "Only a limit or stop-limit order carries a limit price.",
+        code: "INVALID_ORDER",
+      },
+      400,
+    );
+  }
+  if (hasStop(orderType) && orderType !== "TRAILING_STOP") {
+    if (!(Number.isFinite(stopPrice) && (stopPrice as number) > 0)) {
+      return c.json({ error: "A stop order needs a stop price.", code: "INVALID_ORDER" }, 400);
+    }
+  }
+  if (!hasStop(orderType) && stopPrice !== null) {
+    return c.json(
+      { error: "Only a stop order carries a stop price.", code: "INVALID_ORDER" },
+      400,
+    );
+  }
+  if (orderType !== "TRAILING_STOP" && (trailAmount !== null || trailPercent !== null)) {
+    return c.json(
+      { error: "Only a trailing stop carries a trail.", code: "INVALID_ORDER" },
       400,
     );
   }
@@ -170,7 +233,49 @@ orders.post("/", async (c) => {
   // 1. Is the ticker tradable? `undefined` means the nightly universe sync has
   //    never run, which is a property of the deployment and not of the ticker.
   // ---------------------------------------------------------------------------
-  const asset = await lookupSymbol(c.env, symbol).catch(() => undefined);
+  // An option contract is never in KV — the universe is hundreds of thousands
+  // of rows — so asking would reject every contract as untradable. Its
+  // existence is established by the chain having a price for it, checked below.
+  const asset =
+    assetClass === "OPTION" ? undefined : await lookupSymbol(c.env, symbol).catch(() => undefined);
+
+  if (assetClass === "OPTION") {
+    // The contracts endpoint is the option universe's stand-in for KV: it is
+    // what separates a real contract from a symbol that merely parses. Both are
+    // easy to type — the OCC form is twenty-one characters of mostly digits —
+    // and without this check a slip becomes a position in a contract that will
+    // never have a price and can never be sold.
+    let contract;
+    try {
+      contract = await lookupContract(c.env, symbol);
+    } catch (err) {
+      const { message, status } = describeMarketError(err);
+      if (status === 502) console.error("Contract lookup failed:", err);
+      return c.json({ error: message, code: "MARKET_DATA" }, status);
+    }
+
+    if (!contract || !contract.tradable) {
+      return c.json(
+        {
+          error: `${formatContract(symbol)} is not a listed contract. Pick one off the chain.`,
+          code: "INVALID_ORDER",
+        },
+        400,
+      );
+    }
+
+    // Expiring today is still tradable — the settlement job runs after the
+    // close, so the whole session is the member's to use. Expired is not:
+    // nothing will ever price it and nothing will ever settle it.
+    if (contract.expiration < exchangeDate()) {
+      return c.json(
+        { error: `${formatContract(symbol)} has already expired.`, code: "INVALID_ORDER" },
+        400,
+      );
+    }
+
+    multiplier = contract.multiplier;
+  }
 
   if (asset === null) {
     return c.json(
@@ -178,6 +283,20 @@ orders.post("/", async (c) => {
       400,
     );
   }
+  // Two different refusals that read the same to a member. This one is about
+  // the asset class: an option has no margin model here and a coin has no
+  // borrow, so neither has a short side at all.
+  if ((side === "SHORT" || side === "COVER") && !allowsShort(symbol)) {
+    return c.json(
+      {
+        error: `Short selling is not available for ${symbol}, so only BUY and SELL apply here.`,
+        code: "WRONG_SIDE",
+      },
+      409,
+    );
+  }
+  // And this one is about the individual name: hard to borrow, or no borrow
+  // available today.
   if (side === "SHORT" && asset?.shortable === false) {
     return c.json({ error: `${symbol} cannot be sold short.`, code: "INVALID_ORDER" }, 400);
   }
@@ -242,9 +361,45 @@ orders.post("/", async (c) => {
   // price is a stale close, not something to trade against — so everything else
   // is queued, which is the whole point of this route.
   // ---------------------------------------------------------------------------
-  const spec = { side, orderType, limitPrice };
-  const marketShut = tradingWindow(clock);
-  const canFillNow = !marketShut && isMarketable(spec, quote.price);
+  // A trailing stop's trigger is derived, not typed: it starts one trail away
+  // from wherever the market is right now, and `trail_pending_order()` moves it
+  // from there. So it is computed here, once, against the same quote every
+  // other check on this request used.
+  let trigger = stopPrice;
+  if (orderType === "TRAILING_STOP") {
+    const derived = trailingStopFrom(side, quote.price, {
+      amount: trailAmount,
+      percent: trailPercent,
+    });
+    if (typeof derived !== "number") {
+      return c.json({ error: derived.message, code: derived.code }, rejectionStatus(derived.code));
+    }
+    trigger = derived;
+  }
+
+  // A stop has to sit on the far side of the market from where a limit would
+  // go, or it fires on the very next tick — which means the member meant a
+  // market order. Checked here rather than in Postgres, which has no price
+  // feed. A trailing stop is exempt because its trigger was just derived from
+  // the market and is correctly placed by construction.
+  if (hasStop(orderType) && orderType !== "TRAILING_STOP") {
+    const misplaced = checkStopPlacement(side, stopPrice as number, quote.price);
+    if (misplaced) {
+      return c.json(
+        { error: misplaced.message, code: misplaced.code },
+        rejectionStatus(misplaced.code),
+      );
+    }
+  }
+
+  const spec = { side, orderType, limitPrice, stopPrice: trigger };
+  const marketShut = tradingWindow(clock, symbol);
+  // A stop never fills on the way in. Its whole purpose is to wait for a price
+  // the market has not reached — `checkStopPlacement()` has just refused the
+  // one that would fill instantly — so it goes to the queue and the sweep
+  // decides. `isMarketable()` says the same thing for an untriggered stop; this
+  // is here so the reasoning is visible at the branch rather than two files away.
+  const canFillNow = !marketShut && !hasStop(orderType) && isMarketable(spec, quote.price);
 
   if (canFillNow) {
     return fillImmediately(c, {
@@ -255,6 +410,8 @@ orders.post("/", async (c) => {
       body,
       wantsQty,
       fractionable: asset?.fractionable,
+      minSize: asset?.minOrderSize,
+      multiplier,
       portfolio,
       marks,
     });
@@ -263,13 +420,32 @@ orders.post("/", async (c) => {
   // ---------------------------------------------------------------------------
   // 4. Queue it.
   // ---------------------------------------------------------------------------
+  // The venue publishes a floor per crypto pair, and an order under it is
+  // refused by the exchange rather than by us. The immediate path already
+  // learns this inside resolveQuantity(); a queued one would otherwise not find
+  // out until the sweep tried to fill it, days later, having held the buying
+  // power the whole time. Only checkable for a share count — a dollar amount
+  // has no quantity until it fills.
+  const floor = asset?.minOrderSize;
+  if (wantsQty && floor !== undefined && floor > 0 && Number(body.qty) < floor) {
+    return c.json(
+      {
+        error: `The smallest ${symbol} order this venue takes is ${floor}.`,
+        code: "INVALID_ORDER",
+      },
+      400,
+    );
+  }
+
   const reservation = reserveFor({
     side,
     orderType,
     limitPrice,
+    stopPrice: trigger,
     qty: wantsQty ? Number(body.qty) : undefined,
     notional: wantsNotional ? Number(body.notional) : undefined,
     referencePrice: quote.price,
+    multiplier,
   });
 
   if ("ok" in reservation) {
@@ -308,7 +484,14 @@ orders.post("/", async (c) => {
     p_time_in_force: timeInForce,
     p_reserve_cash: reservation.cash,
     p_reserve_qty: reservation.qty,
+    p_multiplier: multiplier,
     p_expires_at: expiresAt,
+    p_stop_price: trigger,
+    p_trail_amount: trailAmount,
+    p_trail_percent: trailPercent,
+    // The anchor a trailing stop measures from. Today's price is the best the
+    // market has offered so far, by definition — the order was placed against it.
+    p_trail_anchor: orderType === "TRAILING_STOP" ? quote.price : null,
   });
 
   if (error) return c.json(...describeRpcError(error));
@@ -328,6 +511,10 @@ orders.post("/", async (c) => {
       side: row.side,
       orderType: row.order_type,
       limitPrice: row.limit_price,
+      stopPrice: row.stop_price,
+      trailAmount: row.trail_amount,
+      trailPercent: row.trail_percent,
+      trailAnchor: row.trail_anchor,
       qty: row.qty,
       notional: row.notional,
       timeInForce: row.time_in_force,
@@ -355,11 +542,14 @@ async function fillImmediately(
     body: OrderBody;
     wantsQty: boolean;
     fractionable: boolean | undefined;
+    minSize: number | undefined;
+    multiplier: number;
     portfolio: Awaited<ReturnType<typeof loadPortfolio>>;
     marks: Record<string, number>;
   },
 ) {
-  const { supabase, symbol, side, price, body, wantsQty, fractionable, portfolio, marks } = args;
+  const { supabase, symbol, side, price, body, wantsQty, fractionable, minSize, multiplier, portfolio, marks } =
+    args;
 
   const resolved = resolveQuantity({
     qty: wantsQty ? Number(body.qty) : undefined,
@@ -367,6 +557,7 @@ async function fillImmediately(
     price,
     symbol,
     fractionable,
+    minSize,
   });
 
   if ("ok" in resolved) {
@@ -376,7 +567,7 @@ async function fillImmediately(
   // Pre-flight. Re-checked under the lock inside place_order(); this exists so a
   // member gets a sentence about their own position instead of a database error.
   const held = portfolio.positions.find((p) => p.symbol === symbol) ?? null;
-  const outcome = applyFill(held, symbol, side, resolved.qty, price);
+  const outcome = applyFill(held, symbol, side, resolved.qty, price, multiplier);
 
   if (!outcome.ok) {
     return c.json({ error: outcome.message, code: outcome.code }, rejectionStatus(outcome.code));
@@ -465,7 +656,7 @@ orders.get("/working", async (c) => {
   const { data, error } = await supabase
     .from("pending_orders")
     .select(
-      "id, symbol, side, order_type, limit_price, qty, notional, time_in_force, status, reserved_cash, reserved_qty, expires_at, placed_at, resolved_at, reject_reason",
+      "id, symbol, side, order_type, limit_price, stop_price, trail_amount, trail_percent, trail_anchor, triggered_at, qty, notional, time_in_force, status, reserved_cash, reserved_qty, expires_at, placed_at, resolved_at, reject_reason",
     )
     .eq("portfolio_id", portfolio.id)
     .order("placed_at", { ascending: false })
@@ -483,6 +674,11 @@ orders.get("/working", async (c) => {
       side: row.side,
       orderType: row.order_type,
       limitPrice: row.limit_price,
+      stopPrice: row.stop_price,
+      trailAmount: row.trail_amount,
+      trailPercent: row.trail_percent,
+      trailAnchor: row.trail_anchor,
+      triggeredAt: row.triggered_at,
       qty: row.qty,
       notional: row.notional,
       timeInForce: row.time_in_force,

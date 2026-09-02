@@ -1,6 +1,7 @@
 import { finnhubFromEnv } from "./finnhub.ts";
 import { MarketConfigError } from "./provider.ts";
-import { UNCLASSIFIED } from "./sectors.ts";
+import { CRYPTO_SECTOR, UNCLASSIFIED } from "./sectors.ts";
+import { classify, cryptoBase, formatContract, underlyingOf } from "./symbols.ts";
 import { lookupSymbol } from "./universe.ts";
 import { ConfigError, serviceClient } from "../lib/supabase.ts";
 import type { Env } from "../types.ts";
@@ -36,7 +37,7 @@ export interface SecurityRecord {
   name: string | null;
   sector: string;
   industry: string | null;
-  assetType: "STOCK" | "ETF";
+  assetType: "STOCK" | "ETF" | "CRYPTO" | "OPTION";
   logoUrl: string | null;
 }
 
@@ -54,7 +55,10 @@ function fromRow(row: SecurityRow): SecurityRecord {
     symbol: row.symbol,
     name: row.name,
     sector: row.sector ?? UNCLASSIFIED,
-    assetType: row.asset_type === "ETF" ? "ETF" : "STOCK",
+    assetType:
+      row.asset_type === "ETF" || row.asset_type === "CRYPTO" || row.asset_type === "OPTION"
+        ? row.asset_type
+        : "STOCK",
     industry: row.industry,
     logoUrl: row.logo_url,
   };
@@ -196,8 +200,61 @@ async function enrich(env: Env, symbols: string[]): Promise<void> {
   await Promise.allSettled([...started, ...joined]);
 }
 
+/**
+ * The record for a symbol Finnhub has never heard of and never will.
+ *
+ * Finnhub prices company fundamentals. A coin has no company, and an option is
+ * a claim on one rather than the thing itself — so neither is worth an HTTP
+ * call, and both would come back empty and land in Unclassified, which on this
+ * dashboard reads as "somebody should add a mapping" rather than "there is
+ * nothing to map".
+ *
+ * An option takes its sector from its underlying, which is the honest answer:
+ * an AAPL call is a bet on Information Technology. That row is already in the
+ * table if anyone has ever held the stock, and gets fetched on its own terms if
+ * not, so this returns null for an option and lets the caller resolve the
+ * underlying instead.
+ */
+function withoutFundamentals(symbol: string): SecurityRecord | null {
+  if (classify(symbol) !== "CRYPTO") return null;
+
+  return {
+    symbol,
+    // "BTC/USD" reads as a pair; "BTC" is what a member calls it.
+    name: cryptoBase(symbol) ?? symbol,
+    sector: CRYPTO_SECTOR,
+    industry: null,
+    assetType: "CRYPTO",
+    logoUrl: null,
+  };
+}
+
 async function fetchAndStore(env: Env, symbol: string): Promise<SecurityRecord | null> {
   let record: SecurityRecord;
+
+  const local = withoutFundamentals(symbol);
+  if (local) {
+    await persist(env, local);
+    return local;
+  }
+
+  // An option's profile is its underlying's. Written under the contract symbol
+  // so a single lookup answers, rather than making every caller know to ask a
+  // second question about a symbol it already has.
+  const underlying = underlyingOf(symbol);
+  if (underlying) {
+    const parent = await fetchAndStore(env, underlying);
+    const derived: SecurityRecord = {
+      symbol,
+      name: formatContract(symbol),
+      sector: parent?.sector ?? UNCLASSIFIED,
+      industry: parent?.industry ?? null,
+      assetType: "OPTION",
+      logoUrl: parent?.logoUrl ?? null,
+    };
+    await persist(env, derived);
+    return derived;
+  }
 
   try {
     const profile = await finnhubFromEnv(env).profile(symbol);
@@ -236,6 +293,13 @@ async function fetchAndStore(env: Env, symbol: string): Promise<SecurityRecord |
 
   await store(env, record);
   memory.set(symbol, { record, loadedAt: Date.now() });
+  return record;
+}
+
+/** Write a record through to the table and the isolate cache, in that order. */
+async function persist(env: Env, record: SecurityRecord): Promise<SecurityRecord> {
+  await store(env, record);
+  memory.set(record.symbol, { record, loadedAt: Date.now() });
   return record;
 }
 

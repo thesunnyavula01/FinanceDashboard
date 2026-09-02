@@ -30,13 +30,25 @@ export type GicsSector = (typeof GICS_SECTORS)[number];
 /** ETFs have no industry, so they get their own bucket rather than a guess. */
 export const ETF_SECTOR = "ETF / Fund";
 
+/**
+ * Coins have no industry either, and no Finnhub profile to ask for one. Its
+ * own bucket rather than Unclassified, because Unclassified on screen is a
+ * prompt to add a mapping here, and there is no mapping to add.
+ */
+export const CRYPTO_SECTOR = "Crypto";
+
 /** Everything the table and the keyword pass both failed to place. */
 export const UNCLASSIFIED = "Unclassified";
 
-export type Sector = GicsSector | typeof ETF_SECTOR | typeof UNCLASSIFIED;
+export type Sector = GicsSector | typeof ETF_SECTOR | typeof CRYPTO_SECTOR | typeof UNCLASSIFIED;
 
 /** Every bucket a position can land in, in the order charts should show them. */
-export const ALL_SECTORS: readonly Sector[] = [...GICS_SECTORS, ETF_SECTOR, UNCLASSIFIED];
+export const ALL_SECTORS: readonly Sector[] = [
+  ...GICS_SECTORS,
+  ETF_SECTOR,
+  CRYPTO_SECTOR,
+  UNCLASSIFIED,
+];
 
 /**
  * Exact matches, keyed by normalised label. Carries both Finnhub's own

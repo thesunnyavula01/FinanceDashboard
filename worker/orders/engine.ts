@@ -1,4 +1,5 @@
 import type { MarketClock } from "../market/provider.ts";
+import { allowsShort, multiplierFor, tradesAroundTheClock } from "../market/symbols.ts";
 
 /**
  * The order rules, in TypeScript.
@@ -64,7 +65,30 @@ export interface Position {
   symbol: string;
   /** Signed: negative is short. */
   qty: number;
+  /** Per share, always — for an option this is the premium, not the contract. */
   avgCost: number;
+  /**
+   * Shares per unit: 1 for a stock or a coin, 100 for an option contract.
+   *
+   * Optional because every row written before migration 0006 is a stock, and
+   * every one of them is correct at 1. Where it is missing the symbol supplies
+   * it, so a contract can never be silently valued at a hundredth of itself.
+   */
+  multiplier?: number;
+}
+
+/**
+ * How many shares one unit of this position is.
+ *
+ * The stored value wins where there is one — an adjusted contract can deliver
+ * something other than 100 — and the symbol is the fallback, because that is
+ * the one thing always present.
+ */
+export function contractSize(position: Pick<Position, "symbol" | "multiplier">): number {
+  const stored = position.multiplier;
+  return typeof stored === "number" && Number.isFinite(stored) && stored > 0
+    ? stored
+    : multiplierFor(position.symbol);
 }
 
 export interface Fill {
@@ -120,6 +144,8 @@ export function applyFill(
   side: OrderSide,
   qty: number,
   price: number,
+  /** Defaults to what the symbol implies, which is 1 for anything but an option. */
+  multiplier: number = multiplierFor(symbol),
 ): OrderOutcome {
   if (!ORDER_SIDES.includes(side)) {
     return reject("INVALID_ORDER", `Unknown order side: ${side}.`);
@@ -130,10 +156,23 @@ export function applyFill(
   if (!Number.isFinite(price) || price <= 0) {
     return reject("INVALID_ORDER", `No usable price for ${symbol}.`);
   }
+  if (!Number.isFinite(multiplier) || multiplier <= 0) {
+    return reject("INVALID_ORDER", `Contract size must be greater than zero for ${symbol}.`);
+  }
+
+  // Only equities can be sold short: an option has no margin model here, and a
+  // coin has no borrow. Mirrors symbol_allows_short() in migration 0006.
+  if ((side === "SHORT" || side === "COVER") && !allowsShort(symbol)) {
+    return reject(
+      "WRONG_SIDE",
+      `Short selling is not available for ${symbol}, so only BUY and SELL apply here.`,
+    );
+  }
 
   const prevQty = position?.qty ?? 0;
   const prevAvg = position?.avgCost ?? 0;
-  const notional = money(qty * price);
+  // avgCost stays a per-share price, so only the money lines carry the size.
+  const notional = money(qty * multiplier * price);
 
   // No accidental flips. Netting a BUY through a short down to a long would be
   // arithmetically tidy and a terrible thing to do to someone who typed the
@@ -161,6 +200,7 @@ export function applyFill(
           symbol,
           qty: newQty,
           avgCost: units((prevQty * prevAvg + qty * price) / newQty),
+          multiplier,
         },
       };
     }
@@ -191,9 +231,9 @@ export function applyFill(
         notional,
         // Selling part of a holding does not change what the rest cost, so the
         // average is carried through untouched and the difference is booked.
-        realizedPnl: money((price - prevAvg) * qty),
+        realizedPnl: money((price - prevAvg) * qty * multiplier),
         cashDelta: notional,
-        position: newQty === 0 ? null : { symbol, qty: newQty, avgCost: prevAvg },
+        position: newQty === 0 ? null : { symbol, qty: newQty, avgCost: prevAvg, multiplier },
       };
     }
 
@@ -220,6 +260,7 @@ export function applyFill(
           symbol,
           qty: newQty,
           avgCost: units((Math.abs(prevQty) * prevAvg + qty * price) / Math.abs(newQty)),
+          multiplier,
         },
       };
     }
@@ -249,9 +290,9 @@ export function applyFill(
         // subtraction runs the other way round. This is the one place the
         // signed-qty convention does not carry the direction for us, because
         // `qty` on an order is always positive.
-        realizedPnl: money((prevAvg - price) * qty),
+        realizedPnl: money((prevAvg - price) * qty * multiplier),
         cashDelta: -notional,
-        position: newQty === 0 ? null : { symbol, qty: newQty, avgCost: prevAvg },
+        position: newQty === 0 ? null : { symbol, qty: newQty, avgCost: prevAvg, multiplier },
       };
     }
   }
@@ -287,8 +328,11 @@ export function marketValues(
   for (const position of positions) {
     const mark = marks[position.symbol];
     const price = Number.isFinite(mark) && mark > 0 ? mark : position.avgCost;
-    if (position.qty > 0) longMv += position.qty * price;
-    else shortMv += Math.abs(position.qty) * price;
+    // One contract is a hundred shares, and a book holding both is valued in
+    // one pass. Mirrors the `post` CTE in place_order().
+    const value = Math.abs(position.qty) * contractSize(position) * price;
+    if (position.qty > 0) longMv += value;
+    else shortMv += value;
   }
 
   longMv = money(longMv);
@@ -357,7 +401,13 @@ export function buyingPowerAfter(
  * a member to try again in a minute is a far cheaper failure than a trade that
  * should not exist.
  */
-export function tradingWindow(clock: MarketClock): Rejection | null {
+export function tradingWindow(clock: MarketClock, symbol?: string): Rejection | null {
+  // Crypto has no session, no holidays and no bell. There is nothing for the
+  // exchange calendar to say about it, so it is not asked — including when the
+  // calendar is unreachable, which must not take the one market that is
+  // definitely open down with it.
+  if (symbol !== undefined && tradesAroundTheClock(symbol)) return null;
+
   if (!clock.authoritative) {
     return reject(
       "MARKET_CLOSED",
@@ -379,6 +429,11 @@ export interface QuantityRequest {
   symbol: string;
   /** From Alpaca's asset list. Undefined when the universe has not synced. */
   fractionable?: boolean;
+  /**
+   * Alpaca's `min_order_size` for a crypto pair. A tenth of a coin is a
+   * perfectly good order and a millionth is not, and the floor is per pair.
+   */
+  minSize?: number;
 }
 
 /**
@@ -392,7 +447,13 @@ export interface QuantityRequest {
  * member asked for, which is the one direction that is never acceptable.
  */
 export function resolveQuantity(request: QuantityRequest): { qty: number } | Rejection {
-  const { price, symbol, fractionable } = request;
+  const { price, symbol, minSize } = request;
+
+  // An option contract is indivisible whatever the universe says about it —
+  // options are not in the KV asset list at all, so `fractionable` arrives
+  // undefined and the floor below would never apply.
+  const fractionable =
+    multiplierFor(symbol) > 1 ? false : request.fractionable;
 
   if (!Number.isFinite(price) || price <= 0) {
     return reject("INVALID_ORDER", `No usable price for ${symbol}.`);
@@ -418,20 +479,39 @@ export function resolveQuantity(request: QuantityRequest): { qty: number } | Rej
     if (!Number.isFinite(notional) || notional <= 0) {
       return reject("INVALID_ORDER", "Dollar amount must be greater than zero.");
     }
+    // Divide by what one unit actually costs. For a stock or a coin that is the
+    // price; for a contract it is a hundred times the premium, and dividing by
+    // the premium would hand a member a hundred times the position they asked
+    // for — $300 of a $5.25 call is half a contract, not fifty-seven.
+    //
     // Floor rather than round, for the same reason as below: a $500 order must
     // never cost $500.01.
-    qty = Math.floor((notional / price) * 1e6) / 1e6;
+    qty = Math.floor((notional / (price * multiplierFor(symbol))) * 1e6) / 1e6;
   }
 
   if (fractionable === false) {
     const whole = Math.floor(qty);
     if (whole < 1) {
-      return reject(
-        "INVALID_ORDER",
-        `${symbol} trades in whole shares only, and that is less than one share at ${dollars(price)}.`,
-      );
+      const unit = multiplierFor(symbol) > 1 ? "contract" : "share";
+      // An option is quoted per share and sold per contract, so the price a
+      // member is refused at has to be the one they would actually pay.
+      const each = dollars(price * multiplierFor(symbol));
+      return {
+        ok: false,
+        code: "INVALID_ORDER",
+        message: `${symbol} trades in whole ${unit}s only, and that is less than one ${unit} at ${each}.`,
+      };
     }
     qty = whole;
+  }
+
+  // Alpaca sets a floor per crypto pair. Below it the order would be accepted
+  // here and refused by reality, which is the wrong order to find out in.
+  if (minSize !== undefined && Number.isFinite(minSize) && minSize > 0 && qty < minSize) {
+    return reject(
+      "INVALID_ORDER",
+      `The smallest ${symbol} order is ${formatQty(minSize)}, and that works out at ${formatQty(qty)}.`,
+    );
   }
 
   if (qty <= 0) {
@@ -472,8 +552,141 @@ function dollars(value: number): string {
 // until Monday.
 // =============================================================================
 
-export const ORDER_TYPES = ["MARKET", "LIMIT"] as const;
+export const ORDER_TYPES = ["MARKET", "LIMIT", "STOP", "STOP_LIMIT", "TRAILING_STOP"] as const;
 export type OrderType = (typeof ORDER_TYPES)[number];
+
+/** The three types that wait for a trigger before they become an order. */
+export const STOP_TYPES = ["STOP", "STOP_LIMIT", "TRAILING_STOP"] as const;
+
+export function hasStop(orderType: OrderType): boolean {
+  return (STOP_TYPES as readonly string[]).includes(orderType);
+}
+
+/** The two types that end as a limit order, and so carry a limit price. */
+export function hasLimit(orderType: OrderType): boolean {
+  return orderType === "LIMIT" || orderType === "STOP_LIMIT";
+}
+
+/**
+ * Which way a stop fires — and the single sentence the whole feature rests on.
+ *
+ * A stop is the mirror of a limit:
+ *
+ *     a LIMIT buys cheaper than the market and sells dearer.
+ *     a STOP  buys dearer  than the market and sells cheaper.
+ *
+ * So BUY and COVER, which are marketable on a limit when the price *falls* to
+ * it, trigger a stop when the price *rises* to it. SELL and SHORT are the other
+ * way round. Written as its own function because getting it backwards produces
+ * an order that looks entirely reasonable and fires at exactly the wrong
+ * moment — a stop-loss that sells into a rally, or a breakout buy that fills on
+ * the way down.
+ */
+export function stopFiresOnRise(side: OrderSide): boolean {
+  return side === "BUY" || side === "COVER";
+}
+
+/**
+ * Has this stop's trigger been reached?
+ *
+ * At or through, in both directions: a stop at 148.50 fires on a print of
+ * exactly 148.50. Brokers differ on the boundary; inclusive is the one a member
+ * expects from the number they typed.
+ */
+export function stopTriggered(
+  order: { side: OrderSide; orderType: OrderType; stopPrice?: number | null },
+  price: number,
+): boolean {
+  if (!hasStop(order.orderType)) return false;
+  if (!Number.isFinite(price) || price <= 0) return false;
+
+  const stop = order.stopPrice;
+  if (!Number.isFinite(stop) || (stop as number) <= 0) return false;
+
+  return stopFiresOnRise(order.side) ? price >= (stop as number) : price <= (stop as number);
+}
+
+/**
+ * Where a stop must sit relative to the market when it is placed.
+ *
+ * A sell stop below the market and a buy stop above it. The other way round is
+ * an order that fires on the very next tick, which means the member meant a
+ * market order and typed a stop — so it is refused with the sentence rather
+ * than accepted and instantly triggered. This is the check Postgres cannot make,
+ * because it has no price feed.
+ */
+export function checkStopPlacement(
+  side: OrderSide,
+  stopPrice: number,
+  referencePrice: number,
+): Rejection | null {
+  if (!Number.isFinite(stopPrice) || stopPrice <= 0) {
+    return reject("INVALID_ORDER", "A stop order needs a stop price.");
+  }
+  if (!Number.isFinite(referencePrice) || referencePrice <= 0) return null;
+
+  const rises = stopFiresOnRise(side);
+  if (rises && stopPrice <= referencePrice) {
+    return reject(
+      "INVALID_ORDER",
+      `A ${side} stop triggers when the price rises to it, so it has to sit above the market. ${side === "BUY" ? "Buying" : "Covering"} at ${dollars(referencePrice)} right now is a market order.`,
+    );
+  }
+  if (!rises && stopPrice >= referencePrice) {
+    return reject(
+      "INVALID_ORDER",
+      `A ${side} stop triggers when the price falls to it, so it has to sit below the market, which is ${dollars(referencePrice)}.`,
+    );
+  }
+  return null;
+}
+
+/**
+ * The stop a trailing order starts at, given the price it was placed against.
+ *
+ * The trail is expressed either in dollars or as a percent of the anchor, and
+ * the anchor moves only in the member's favour from here — `trail_pending_order()`
+ * in migration 0007 owns the ratchet. This is just the opening position.
+ */
+export function trailingStopFrom(
+  side: OrderSide,
+  anchor: number,
+  trail: { amount?: number | null; percent?: number | null },
+): number | Rejection {
+  if (!Number.isFinite(anchor) || anchor <= 0) {
+    return reject("INVALID_ORDER", "No usable price to trail from.");
+  }
+
+  const amount = trail.amount ?? null;
+  const percent = trail.percent ?? null;
+  if ((amount === null) === (percent === null)) {
+    return reject(
+      "INVALID_ORDER",
+      "A trailing stop needs either a trail amount in dollars or a trail percent, not both.",
+    );
+  }
+  if (amount !== null && (!Number.isFinite(amount) || amount <= 0)) {
+    return reject("INVALID_ORDER", "A trail amount must be greater than zero.");
+  }
+  if (percent !== null && (!Number.isFinite(percent) || percent <= 0 || percent >= 100)) {
+    return reject("INVALID_ORDER", "A trail percent must be between 0 and 100.");
+  }
+
+  const rises = stopFiresOnRise(side);
+  const offset = amount !== null ? amount : (anchor * (percent as number)) / 100;
+  const stop = rises ? anchor + offset : anchor - offset;
+
+  // A dollar trail wider than the price itself would put the stop at or below
+  // zero, where nothing can ever reach it — a good-til-cancelled no-op wearing
+  // a stop-loss's clothes.
+  if (stop <= 0) {
+    return reject(
+      "INVALID_ORDER",
+      `A trail of ${dollars(offset)} is wider than ${dollars(anchor)}, so the stop would never be reachable.`,
+    );
+  }
+  return round(stop, 6);
+}
 
 export const TIME_IN_FORCE = ["DAY", "GTC"] as const;
 export type TimeInForce = (typeof TIME_IN_FORCE)[number];
@@ -497,14 +710,18 @@ export const MARKET_ORDER_BUFFER = 0.05;
 export interface RestingOrderSpec {
   side: OrderSide;
   orderType: OrderType;
-  /** Required for LIMIT, absent for MARKET. */
+  /** Required for LIMIT and STOP_LIMIT, absent otherwise. */
   limitPrice?: number | null;
+  /** Required for STOP, STOP_LIMIT and TRAILING_STOP, absent otherwise. */
+  stopPrice?: number | null;
   /** A share count. Required on SELL and COVER — see reserveFor(). */
   qty?: number;
   /** A dollar amount. Opening sides only. */
   notional?: number;
   /** Last known price, used only to size a market order's reservation. */
   referencePrice: number;
+  /** Shares per unit. Defaults to what the symbol implies. */
+  multiplier?: number;
 }
 
 export interface Reservation {
@@ -530,12 +747,25 @@ export interface Reservation {
 export function reserveFor(spec: RestingOrderSpec): Reservation | Rejection {
   const { side, orderType, referencePrice } = spec;
   const limitPrice = spec.limitPrice ?? null;
+  const stopPrice = spec.stopPrice ?? null;
+  // A queued contract costs a hundred times its premium, and reserving the
+  // premium would let a member queue a hundred orders they cannot pay for.
+  const multiplier = spec.multiplier ?? 1;
+  if (!Number.isFinite(multiplier) || multiplier <= 0) {
+    return reject("INVALID_ORDER", "Contract size must be greater than zero.");
+  }
 
-  if (orderType === "LIMIT" && !(Number.isFinite(limitPrice) && (limitPrice as number) > 0)) {
+  if (hasLimit(orderType) && !(Number.isFinite(limitPrice) && (limitPrice as number) > 0)) {
     return reject("INVALID_ORDER", "A limit order needs a limit price.");
   }
-  if (orderType === "MARKET" && limitPrice !== null) {
-    return reject("INVALID_ORDER", "A market order cannot carry a limit price.");
+  if (!hasLimit(orderType) && limitPrice !== null) {
+    return reject("INVALID_ORDER", "Only a limit or stop-limit order carries a limit price.");
+  }
+  if (hasStop(orderType) && !(Number.isFinite(stopPrice) && (stopPrice as number) > 0)) {
+    return reject("INVALID_ORDER", "A stop order needs a stop price.");
+  }
+  if (!hasStop(orderType) && stopPrice !== null) {
+    return reject("INVALID_ORDER", "Only a stop order carries a stop price.");
   }
   if (!Number.isFinite(referencePrice) || referencePrice <= 0) {
     return reject("INVALID_ORDER", "No usable price to size this order against.");
@@ -545,6 +775,17 @@ export function reserveFor(spec: RestingOrderSpec): Reservation | Rejection {
   const hasNotional = spec.notional !== undefined;
   if (hasQty === hasNotional) {
     return reject("INVALID_ORDER", "Enter either a share count or a dollar amount, not both.");
+  }
+
+  // A stop has no price until it triggers, and converting a dollar amount at a
+  // price that does not exist yet runs the wrong way — the cheaper the fill,
+  // the more shares "$500 of NVDA" turns out to be. Same reason a closing
+  // order is entered in shares, one step earlier in the order's life.
+  if (hasStop(orderType) && !hasQty) {
+    return reject(
+      "INVALID_ORDER",
+      `A ${orderType.replace("_", "-").toLowerCase()} order is entered in shares, not dollars — its fill price is not known until it triggers.`,
+    );
   }
 
   const closing = side === "SELL" || side === "COVER";
@@ -583,13 +824,24 @@ export function reserveFor(spec: RestingOrderSpec): Reservation | Rejection {
 
     if (orderType === "LIMIT" && side === "BUY") {
       // The limit is the cap. No head-room needed.
-      worstCost = qty * (limitPrice as number);
+      worstCost = qty * multiplier * (limitPrice as number);
+    } else if (orderType === "STOP_LIMIT" && side === "BUY") {
+      // The stop only decides *when*; the limit still caps *what*.
+      worstCost = qty * multiplier * (limitPrice as number);
     } else if (orderType === "LIMIT") {
       // A SHORT limit fills at its price *or higher*, so the proceeds — and the
       // margin against them — have no ceiling. Buffered like a market order.
-      worstCost = qty * (limitPrice as number) * (1 + MARKET_ORDER_BUFFER);
+      worstCost = qty * multiplier * (limitPrice as number) * (1 + MARKET_ORDER_BUFFER);
+    } else if (hasStop(orderType)) {
+      // A BUY stop sits *above* the market by definition and becomes a market
+      // order when it gets there, so the last price is the wrong thing to
+      // reserve against — it understates the cost by the whole distance to the
+      // trigger. The stop is the floor, and the usual head-room covers the gap
+      // past it. A SHORT stop sits below and is bounded the same way.
+      const trigger = Math.max(stopPrice as number, referencePrice);
+      worstCost = qty * multiplier * trigger * (1 + MARKET_ORDER_BUFFER);
     } else {
-      worstCost = qty * referencePrice * (1 + MARKET_ORDER_BUFFER);
+      worstCost = qty * multiplier * referencePrice * (1 + MARKET_ORDER_BUFFER);
     }
   }
 
@@ -606,11 +858,30 @@ export function reserveFor(spec: RestingOrderSpec): Reservation | Rejection {
  * receiving and want it at or above.
  */
 export function isMarketable(
-  order: { side: OrderSide; orderType: OrderType; limitPrice?: number | null },
+  order: {
+    side: OrderSide;
+    orderType: OrderType;
+    limitPrice?: number | null;
+    stopPrice?: number | null;
+    /** Set once the stop has fired. Until then a stop is not an order yet. */
+    triggeredAt?: string | null;
+  },
   price: number,
 ): boolean {
   if (!Number.isFinite(price) || price <= 0) return false;
-  if (order.orderType === "MARKET") return true;
+
+  // A stop that has not fired is not marketable at any price. Once it has, it
+  // stops being a stop: STOP and TRAILING_STOP become market orders, and
+  // STOP_LIMIT becomes a limit order that may still have to wait. The trigger
+  // is recorded rather than re-derived, so an order cannot un-fire when the
+  // price crosses back.
+  if (hasStop(order.orderType)) {
+    const fired = order.triggeredAt != null || stopTriggered(order, price);
+    if (!fired) return false;
+    if (order.orderType !== "STOP_LIMIT") return true;
+  } else if (order.orderType === "MARKET") {
+    return true;
+  }
 
   const limit = order.limitPrice;
   if (!Number.isFinite(limit) || (limit as number) <= 0) return false;

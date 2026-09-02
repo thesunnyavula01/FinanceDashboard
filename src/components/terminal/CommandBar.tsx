@@ -20,7 +20,11 @@ type Response = { tone: "ok" | "error" | "busy"; text: string } | null;
  */
 function parseOrder(command: string): TicketPrefill | null {
   const match = command.match(
-    /^(BUY|SELL|SHORT|COVER)\s+(\$?)([\d,]*\.?\d+)\s+([A-Z][A-Z0-9.-]{0,9})(?:\s+(?:@|LMT|LIMIT)\s*([\d,]*\.?\d+))?$/,
+    // The symbol half accepts a crypto pair as well as a ticker, so
+    // "BUY $250 BTC/USD" works. It deliberately does not accept an OCC contract
+    // symbol: nobody types twenty characters of zero-padded strike, and the
+    // chain is how a contract gets picked.
+    /^(BUY|SELL|SHORT|COVER)\s+(\$?)([\d,]*\.?\d+)\s+([A-Z][A-Z0-9.-]{0,9}(?:\/[A-Z]{2,6})?)(?:\s+(?:@|LMT|LIMIT)\s*([\d,]*\.?\d+))?$/,
   );
   if (!match) return null;
 

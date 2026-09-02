@@ -296,7 +296,7 @@ async function loadSeasonPortfolios(
 ): Promise<SnapshotPortfolio[]> {
   const { data, error } = await supabase
     .from("portfolios")
-    .select("id, cash, positions(symbol, qty, avg_cost)")
+    .select("id, cash, positions(symbol, qty, avg_cost, multiplier)")
     .eq("season_id", seasonId)
     .limit(MAX_PORTFOLIOS);
 
@@ -309,6 +309,7 @@ async function loadSeasonPortfolios(
       symbol: position.symbol as string,
       qty: Number(position.qty),
       avgCost: Number(position.avg_cost),
+      multiplier: Number(position.multiplier ?? 1),
     })),
   }));
 }

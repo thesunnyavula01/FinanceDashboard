@@ -1,4 +1,5 @@
-import { alpacaFromEnv } from "./alpaca.ts";
+import { providerFromEnv } from "./router.ts";
+import { classify, type AssetClass } from "./symbols.ts";
 import type { TradableAsset } from "./provider.ts";
 
 /**
@@ -29,8 +30,15 @@ const FRACTIONABLE = 1;
 const SHORTABLE = 2;
 const EASY_TO_BORROW = 4;
 
-/** [symbol, name, flags] — an array, not an object, to keep the shards small. */
-type PackedAsset = [string, string, number];
+/**
+ * [symbol, name, flags] — an array, not an object, to keep the shards small.
+ *
+ * A fourth element carries a crypto pair's minimum order size, which equities
+ * do not have. Optional rather than always present, so the thirteen thousand
+ * equity rows are unchanged in size and every shard written before this stays
+ * readable.
+ */
+type PackedAsset = [string, string, number] | [string, string, number, number];
 
 export interface UniverseMeta {
   count: number;
@@ -66,11 +74,13 @@ function pack(asset: TradableAsset): PackedAsset {
     (asset.fractionable ? FRACTIONABLE : 0) |
     (asset.shortable ? SHORTABLE : 0) |
     (asset.easyToBorrow ? EASY_TO_BORROW : 0);
-  return [asset.symbol, asset.name, flags];
+  return asset.minOrderSize !== undefined
+    ? [asset.symbol, asset.name, flags, asset.minOrderSize]
+    : [asset.symbol, asset.name, flags];
 }
 
 function unpack(packed: PackedAsset): TradableAsset {
-  const [symbol, name, flags] = packed;
+  const [symbol, name, flags, minOrderSize] = packed;
   return {
     symbol,
     name,
@@ -80,6 +90,7 @@ function unpack(packed: PackedAsset): TradableAsset {
     fractionable: (flags & FRACTIONABLE) !== 0,
     shortable: (flags & SHORTABLE) !== 0,
     easyToBorrow: (flags & EASY_TO_BORROW) !== 0,
+    ...(minOrderSize === undefined ? {} : { minOrderSize }),
   };
 }
 
@@ -112,7 +123,7 @@ export function syncUniverse(env: UniverseEnv): Promise<UniverseMeta> {
 }
 
 async function runSync(env: UniverseEnv): Promise<UniverseMeta> {
-  const assets = await alpacaFromEnv(env).assets();
+  const assets = await providerFromEnv(env).assets();
 
   const bySymbol = new Map<string, PackedAsset[]>();
   const byName = new Map<string, PackedAsset[]>();
@@ -161,6 +172,7 @@ export async function searchSymbols(
   env: UniverseEnv,
   query: string,
   limit = 20,
+  assetClass?: AssetClass,
 ): Promise<UniverseSearchResult> {
   const needle = query.trim().toUpperCase();
   if (!needle) return { results: [], warming: false };
@@ -182,6 +194,12 @@ export async function searchSymbols(
   for (const row of [...(symbolRows ?? []), ...(nameRows ?? [])]) {
     const [symbol, name] = row;
     if (seen.has(symbol)) continue;
+    // One universe, three classes, one shard per letter — so a search from the
+    // crypto ticket would otherwise walk straight past BTC/USD and return five
+    // hundred stocks beginning with B. Filtered here rather than in the
+    // browser, because trimming after the slice would return a page of
+    // equities and then show none of it.
+    if (assetClass !== undefined && classify(symbol) !== assetClass) continue;
 
     const lowerName = name.toLowerCase();
     let rank: number;
@@ -215,4 +233,9 @@ export async function lookupSymbol(
 
   const found = rows.find((row) => row[0] === wanted);
   return found ? unpack(found) : null;
+}
+
+/** Drops the in-memory shard cache. Tests only. */
+export function forgetShards(): void {
+  shardMemory.clear();
 }

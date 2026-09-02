@@ -1,4 +1,5 @@
-import { alpacaFromEnv } from "./alpaca.ts";
+import { providerFromEnv } from "./router.ts";
+import { isTradableSymbol, normalise } from "./symbols.ts";
 import type { PriceProvider, Quote } from "./provider.ts";
 
 /**
@@ -37,8 +38,15 @@ export const MAX_SYMBOLS_PER_REQUEST = 300;
  */
 const NEGATIVE_TTL_SECONDS = 300;
 
-/** Tickers are 1-10 characters; dots and dashes appear in names like BRK.B. */
-const SYMBOL_PATTERN = /^[A-Z][A-Z0-9.-]{0,9}$/;
+/**
+ * What shapes this cache will accept.
+ *
+ * Three classes now, so the single ticker regex moved to symbols.ts, which is
+ * also what decides which upstream a symbol is routed to. Keeping the test
+ * here would have meant a crypto pair being rejected as malformed by the cache
+ * and accepted as tradable by the order route, one layer apart.
+ */
+const accepts = isTradableSymbol;
 
 interface CacheEntry {
   /** Null means "upstream had no price for this", cached to stop a hot loop. */
@@ -69,9 +77,9 @@ export function parseSymbols(
   const rejected: string[] = [];
 
   for (const piece of (raw ?? "").split(",")) {
-    const symbol = piece.trim().toUpperCase();
+    const symbol = normalise(piece);
     if (!symbol) continue;
-    if (!SYMBOL_PATTERN.test(symbol)) {
+    if (!accepts(symbol)) {
       if (!rejected.includes(symbol)) rejected.push(symbol);
       continue;
     }
@@ -122,7 +130,9 @@ export class QuoteCache {
   }
 
   #edgeKey(symbol: string): string {
-    return `https://quote-cache.invalid/${this.#namespace}/${symbol}`;
+    // Encoded, because BTC/USD would otherwise split into two path segments and
+    // collide with anything else that happened to land on that path.
+    return `https://quote-cache.invalid/${this.#namespace}/${encodeURIComponent(symbol)}`;
   }
 
   async get(
@@ -288,7 +298,7 @@ export function quoteCache(env: QuoteEnv): QuoteCache {
   if (shared?.key === key) return shared.cache;
 
   const cache = new QuoteCache({
-    provider: alpacaFromEnv(env),
+    provider: providerFromEnv(env),
     ttlSeconds,
     cache: typeof caches === "undefined" ? null : caches.default,
     namespace: `v1/${feed}`,

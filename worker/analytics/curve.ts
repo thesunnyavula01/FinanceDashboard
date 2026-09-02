@@ -1,5 +1,16 @@
 import { exchangeDate } from "../market/provider.ts";
 import type { OrderSide } from "../orders/engine.ts";
+import { multiplierFor } from "../market/symbols.ts";
+
+/**
+ * What can appear in the blotter, which is one more thing than can be ordered.
+ *
+ * An option that reaches its expiration date is settled for cash at intrinsic
+ * value by the nightly job. That is not a sale — nobody chose it, and the price
+ * can legitimately be zero — so it is booked as its own side rather than as a
+ * SELL a member never placed.
+ */
+export type TradeSide = OrderSide | "EXPIRE";
 
 /**
  * The equity curve, as arithmetic.
@@ -45,10 +56,16 @@ export const BENCHMARKS = ["SPY", "QQQ"] as const;
 /** One fill, as the blotter stores it: `qty` and `notional` always positive. */
 export interface TradeRecord {
   symbol: string;
-  side: OrderSide;
+  side: TradeSide;
   qty: number;
   price: number;
   notional: number;
+  /**
+   * Shares per unit — 100 for an option contract. Absent on every fill written
+   * before migration 0006, all of which are stocks and all of which are correct
+   * at 1.
+   */
+  multiplier?: number;
   executedAt: string;
 }
 
@@ -68,12 +85,28 @@ export interface EquityPoint {
  * not a deduction from it.
  */
 export function cashDelta(trade: Pick<TradeRecord, "side" | "notional">): number {
+  // EXPIRE pays in like a SELL, because that is what it is: a sale at intrinsic
+  // value. A worthless contract settles at a notional of zero, which moves cash
+  // by zero — the direction is still the direction.
   return trade.side === "BUY" || trade.side === "COVER" ? -trade.notional : trade.notional;
 }
 
 /** What a fill does to the position. COVER buys back, so it moves qty upward. */
 export function qtyDelta(trade: Pick<TradeRecord, "side" | "qty">): number {
   return trade.side === "BUY" || trade.side === "COVER" ? trade.qty : -trade.qty;
+}
+
+/**
+ * Shares per unit for a fill, falling back to what the symbol implies.
+ *
+ * The replay values a book without a positions table to read, so it learns each
+ * symbol's contract size from the fills that built it.
+ */
+export function fillMultiplier(trade: Pick<TradeRecord, "symbol" | "multiplier">): number {
+  const stored = trade.multiplier;
+  return typeof stored === "number" && Number.isFinite(stored) && stored > 0
+    ? stored
+    : multiplierFor(trade.symbol);
 }
 
 export interface ReplayInput {
@@ -118,6 +151,9 @@ export function replayEquity({
     .sort((a, b) => Date.parse(a.executedAt) - Date.parse(b.executedAt));
 
   const held = new Map<string, number>();
+  // Contract size per symbol, learned from the fills. The replay has no
+  // positions table to read it off.
+  const sizeOf = new Map<string, number>();
   const lastClose = new Map<string, number>();
   const lastDate = dates.at(-1);
 
@@ -133,6 +169,7 @@ export function replayEquity({
       cursor += 1;
       cash += cashDelta(fill);
       held.set(fill.symbol, (held.get(fill.symbol) ?? 0) + qtyDelta(fill));
+      sizeOf.set(fill.symbol, fillMultiplier(fill));
       if (!lastClose.has(fill.symbol)) lastClose.set(fill.symbol, fill.price);
     }
 
@@ -148,8 +185,9 @@ export function replayEquity({
       const live = date === lastDate ? marks?.get(symbol) : undefined;
       const price = live ?? lastClose.get(symbol) ?? 0;
 
-      if (qty > 0) longMv += qty * price;
-      else shortMv += -qty * price;
+      const value = Math.abs(qty) * (sizeOf.get(symbol) ?? 1) * price;
+      if (qty > 0) longMv += value;
+      else shortMv += value;
     }
 
     points.push({
@@ -237,6 +275,9 @@ export function replayIntraday({
     .sort((a, b) => a.at - b.at);
 
   const held = new Map<string, number>();
+  // As in the session replay: contract size is learned from the fills, because
+  // there is no positions table in here to read it from.
+  const sizeOf = new Map<string, number>();
   const lastPrice = new Map<string, number>();
   let cash = startingCash;
 
@@ -246,6 +287,7 @@ export function replayIntraday({
     if (fill.date < sessionDate) {
       cash += cashDelta(fill);
       held.set(fill.symbol, (held.get(fill.symbol) ?? 0) + qtyDelta(fill));
+      sizeOf.set(fill.symbol, fillMultiplier(fill));
       if (!lastPrice.has(fill.symbol)) lastPrice.set(fill.symbol, fill.price);
     } else if (fill.date === sessionDate) {
       during.push(fill);
@@ -264,7 +306,7 @@ export function replayIntraday({
   let base = cash;
   for (const [symbol, qty] of held) {
     if (qty === 0) continue;
-    base += qty * (lastPrice.get(symbol) ?? 0);
+    base += qty * (sizeOf.get(symbol) ?? 1) * (lastPrice.get(symbol) ?? 0);
   }
 
   const lastStamp = stamps.at(-1);
@@ -297,8 +339,9 @@ export function replayIntraday({
       const live = stamp === lastStamp ? marks?.get(symbol) : undefined;
       const price = live ?? lastPrice.get(symbol) ?? 0;
 
-      if (qty > 0) longMv += qty * price;
-      else shortMv += -qty * price;
+      const value = Math.abs(qty) * (sizeOf.get(symbol) ?? 1) * price;
+      if (qty > 0) longMv += value;
+      else shortMv += value;
     }
 
     points.push({ at: stamp, cash, longMv, shortMv, equity: cash + longMv - shortMv });

@@ -50,16 +50,24 @@
   "triggers": {
     "crons": [
       // The resting-order sweep: fills orders queued while the market was shut,
-      // and expires day orders at the close. Every minute from 13:00 to 21:59
-      // UTC on weekdays, which brackets 09:30-16:00 ET in both EDT (UTC-4) and
-      // EST (UTC-5) without needing to know which is in force. The sweep itself
-      // reads the exchange calendar and does nothing unless the market is
-      // genuinely open, so the extra ticks around the edges — and on holidays —
-      // cost one cached clock lookup each.
+      // and expires day orders at the close.
       //
-      // No weekend entry, deliberately. There is no session to fill into: a
-      // queue built on Sunday comes to life at Monday's open.
-      "* 13-21 * * 1-5",
+      // Every minute of every day, because crypto has no bell. A queued BTC
+      // limit is fillable at 3am on a Sunday, and there is no honest reason to
+      // make it wait for the NYSE to open. The equity window this used to be
+      // ("* 13-21 * * 1-5") is now enforced per order inside the sweep, by
+      // tradingWindow(), which asks the exchange calendar for a stock or an
+      // option and nothing at all for a coin.
+      //
+      // The idle cost is one indexed query against pending_orders — the sweep
+      // looks for work before it looks at the clock, so the ~1,400 ticks a day
+      // that have nothing to do cost a single row count and no upstream call.
+      //
+      // This DOES share a minute with the nightly job at 22:15, which the old
+      // schedule was arranged to avoid. That is unavoidable once the sweep runs
+      // continuously, and it is harmless: scheduled() dispatches the two as
+      // independent waitUntil promises that touch different tables.
+      "* * * * *",
 
       // The nightly tick: refresh the tradable universe, then snapshot every
       // portfolio and the two benchmarks.

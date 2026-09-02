@@ -7,6 +7,7 @@
  */
 
 import { accessToken } from "./supabase";
+import type { AssetClass } from "./symbols";
 
 export type SessionState = "OPEN" | "CLOSED" | "PRE" | "POST";
 
@@ -150,12 +151,43 @@ export interface SecuritiesResponse {
   rejected: string[];
 }
 
+/** One row of the option chain. No greeks — see `worker/market/options.ts`. */
+export interface ChainContract {
+  symbol: string;
+  underlying: string;
+  expiration: string;
+  type: "CALL" | "PUT";
+  strike: number;
+  multiplier: number;
+  openInterest: number | null;
+  tradable: boolean;
+  bid: number | null;
+  ask: number | null;
+  last: number | null;
+  /** What an order would fill against — the midpoint where there is one. */
+  mark: number | null;
+}
+
+export interface ChainResponse {
+  underlying: string;
+  underlyingPrice: number | null;
+  expirations: string[];
+  expiration: string | null;
+  contracts: ChainContract[];
+}
+
 export interface SymbolMatch {
   symbol: string;
   name: string;
   fractionable: boolean;
   shortable: boolean;
   easyToBorrow: boolean;
+  /**
+   * The smallest order the venue will take. Alpaca publishes it per crypto
+   * pair and not at all for equities, where one share is the floor and
+   * `fractionable` already says so.
+   */
+  minOrderSize?: number;
 }
 
 export interface SymbolSearchResponse {
@@ -174,13 +206,25 @@ export type OrderSide = "BUY" | "SELL" | "SHORT" | "COVER";
 export const ORDER_SIDES: OrderSide[] = ["BUY", "SELL", "SHORT", "COVER"];
 
 /**
+ * What the blotter can contain, which is one more thing than can be ordered.
+ *
+ * An option reaching its expiration date is settled for cash at intrinsic
+ * value by the nightly job. Nobody placed it, and the price can be zero, so it
+ * is its own side rather than a SELL a member never asked for.
+ */
+export type TradeSide = OrderSide | "EXPIRE";
+
+/**
  * A holding. `qty` is signed — negative is short — which is what lets one P/L
  * formula, (price - avgCost) * qty, be correct in both directions.
  */
 export interface PositionRow {
   symbol: string;
   qty: number;
+  /** Per share. For an option this is the premium, not the contract cost. */
   avgCost: number;
+  /** Shares per unit: 100 for an option contract, 1 for everything else. */
+  multiplier?: number;
 }
 
 export interface PortfolioResponse {
@@ -278,13 +322,14 @@ export interface HistoryResponse {
 export interface Trade {
   id: string;
   symbol: string;
-  side: OrderSide;
+  side: TradeSide;
   /** Always positive; `side` carries the direction. */
   qty: string;
   price: string;
   notional: string;
   /** Booked at the moment of the fill. Does not move when prices do. */
   realizedPnl: string;
+  multiplier?: string;
   executedAt: string;
 }
 
@@ -293,11 +338,51 @@ export interface BlotterResponse {
   note?: string;
 }
 
-export type OrderType = "MARKET" | "LIMIT";
+export type OrderType = "MARKET" | "LIMIT" | "STOP" | "STOP_LIMIT" | "TRAILING_STOP";
 export type TimeInForce = "DAY" | "GTC";
 
-export const ORDER_TYPES: OrderType[] = ["MARKET", "LIMIT"];
+export const ORDER_TYPES: OrderType[] = [
+  "MARKET",
+  "LIMIT",
+  "STOP",
+  "STOP_LIMIT",
+  "TRAILING_STOP",
+];
 export const TIME_IN_FORCE: TimeInForce[] = ["DAY", "GTC"];
+
+/** Short labels for the type rail. Four characters or fewer, so the row fits. */
+export const ORDER_TYPE_KEY: Record<OrderType, string> = {
+  MARKET: "MKT",
+  LIMIT: "LMT",
+  STOP: "STP",
+  STOP_LIMIT: "STPL",
+  TRAILING_STOP: "TRL",
+};
+
+/** The three types that wait for a trigger. Mirrors `hasStop()` in the engine. */
+export function hasStop(orderType: OrderType): boolean {
+  return orderType === "STOP" || orderType === "STOP_LIMIT" || orderType === "TRAILING_STOP";
+}
+
+/** The two types that end as a limit order. Mirrors `hasLimit()` in the engine. */
+export function hasLimit(orderType: OrderType): boolean {
+  return orderType === "LIMIT" || orderType === "STOP_LIMIT";
+}
+
+/**
+ * Which way a stop fires. The mirror of the limit rule, and the sentence the
+ * whole feature rests on:
+ *
+ *     a LIMIT buys cheaper than the market and sells dearer.
+ *     a STOP  buys dearer  than the market and sells cheaper.
+ *
+ * Mirrored from the Worker's `stopFiresOnRise()`, which is the authority. The
+ * ticket needs it to say which side of the market a stop has to sit on before
+ * the member submits an order the Worker would refuse.
+ */
+export function stopFiresOnRise(side: OrderSide): boolean {
+  return side === "BUY" || side === "COVER";
+}
 
 /**
  * What the member is asking for. There is no execution-price field, and that is
@@ -312,8 +397,14 @@ export interface OrderRequest {
   symbol: string;
   side: OrderSide;
   orderType?: OrderType;
-  /** Required for LIMIT. The price condition, not the fill price. */
+  /** Required for LIMIT and STOP_LIMIT. A condition, not the fill price. */
   limitPrice?: number;
+  /** Required for STOP and STOP_LIMIT. The trigger, not the fill price. */
+  stopPrice?: number;
+  /** TRAILING_STOP only, in dollars. Mutually exclusive with `trailPercent`. */
+  trailAmount?: number;
+  /** TRAILING_STOP only, as a percent of the anchor. */
+  trailPercent?: number;
   /** Share count. Mutually exclusive with `notional`. */
   qty?: number;
   /** Dollar amount, converted by the Worker at the price it fetched. */
@@ -328,6 +419,14 @@ export interface WorkingOrder {
   side: OrderSide;
   orderType: OrderType;
   limitPrice: string | null;
+  /** The trigger. Derived and re-derived each sweep on a trailing stop. */
+  stopPrice: string | null;
+  trailAmount: string | null;
+  trailPercent: string | null;
+  /** Best price seen since placement — what a trailing stop measures from. */
+  trailAnchor: string | null;
+  /** Set once the stop fired. A triggered stop-limit is a limit order. */
+  triggeredAt: string | null;
   qty: string | null;
   notional: string | null;
   timeInForce: TimeInForce;
@@ -659,13 +758,29 @@ export const api = {
       { authed: true },
     ),
 
-  searchSymbols: (query: string, limit = 20) =>
-    request<SymbolSearchResponse>(
-      `/market/symbols?q=${encodeURIComponent(query)}&limit=${limit}`,
-      { authed: true },
-    ),
+  /**
+   * Ticker autocomplete. `assetClass` narrows it to one instrument — omit it
+   * only where the caller genuinely means "anything", like the command bar.
+   */
+  searchSymbols: (query: string, limit = 20, assetClass?: AssetClass) => {
+    const params = new URLSearchParams({ q: query, limit: String(limit) });
+    if (assetClass) params.set("class", assetClass);
+    return request<SymbolSearchResponse>(`/market/symbols?${params}`, { authed: true });
+  },
 
   clock: () => request<ClockResponse>("/market/clock", { authed: true }),
+
+  /**
+   * One underlying's option chain. Omit `expiration` for the front month.
+   *
+   * One expiration at a time, always: the whole surface for a liquid name is
+   * tens of thousands of contracts, and a member reads one ladder.
+   */
+  chain: (underlying: string, expiration?: string) => {
+    const params = new URLSearchParams({ underlying });
+    if (expiration) params.set("expiration", expiration);
+    return request<ChainResponse>(`/market/chain?${params}`, { authed: true });
+  },
 
   /** The standings. Identical for every member, so the Worker memoises it. */
   standings: () => request<StandingsResponse>("/leaderboard", { authed: true }),

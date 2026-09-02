@@ -1,4 +1,6 @@
+import { hasLimit, hasStop } from "./api";
 import type { OrderSide, OrderType, PositionRow, Quote, Security } from "./api";
+import { multiplierFor, formatContract, underlyingOf } from "@/lib/symbols";
 
 /**
  * Valuing a portfolio on screen.
@@ -51,6 +53,20 @@ export interface PortfolioTotals {
 
 export const REG_T_MARGIN_MULTIPLIER = 1.5;
 
+/**
+ * Shares per unit for a position: 100 for an option contract.
+ *
+ * The stored value wins where there is one, and the symbol is the fallback,
+ * so a row written before migration 0006 — every one of which is a stock — is
+ * correct at 1 without a backfill. Mirrors contractSize() in the order engine.
+ */
+export function contractSize(position: Pick<PositionRow, "symbol" | "multiplier">): number {
+  const stored = position.multiplier;
+  return typeof stored === "number" && Number.isFinite(stored) && stored > 0
+    ? stored
+    : multiplierFor(position.symbol);
+}
+
 export interface ValueInput {
   positions: PositionRow[];
   quotes: Record<string, Quote>;
@@ -71,14 +87,22 @@ export function valuePortfolio({
 
   const priced = positions.map((position) => {
     const quote = quotes[position.symbol];
-    const security = securities[position.symbol];
+    // An option falls back to its underlying's row. The Worker writes a row
+    // under the contract symbol carrying the underlying's sector, but that
+    // arrives on a later poll, and a contract sitting in Unclassified for ten
+    // seconds reads as a mapping someone forgot rather than as a pending fetch.
+    const security =
+      securities[position.symbol] ?? securities[underlyingOf(position.symbol) ?? ""];
     // A symbol the market data layer cannot price falls back to its average
     // cost, which values the position at exactly break-even and is flagged
     // rather than quietly shown as a real mark.
     const last = quote?.price ?? position.avgCost;
 
-    if (position.qty > 0) longMv += position.qty * last;
-    else shortMv += Math.abs(position.qty) * last;
+    // One contract is a hundred shares. A book holding stock, coins and
+    // contracts is valued in one pass, exactly as the Worker values it.
+    const value = Math.abs(position.qty) * contractSize(position) * last;
+    if (position.qty > 0) longMv += value;
+    else shortMv += value;
 
     return {
       position,
@@ -95,14 +119,19 @@ export function valuePortfolio({
   const netBuyingPower = cash - marginHeld;
 
   const rows: ValuedPosition[] = priced.map(({ position, last, quote, security, stale }) => {
-    const marketValue = position.qty * last;
-    const pnl = (last - position.avgCost) * position.qty;
-    const costBasis = position.avgCost * Math.abs(position.qty);
+    const size = contractSize(position);
+    const isContract = size > 1;
+    const marketValue = position.qty * size * last;
+    const pnl = (last - position.avgCost) * position.qty * size;
+    const costBasis = position.avgCost * Math.abs(position.qty) * size;
     const prevClose = quote?.prevClose ?? null;
 
     return {
       ...position,
-      name: security?.name ?? position.symbol,
+      // A contract names itself. Its underlying's company name would be the
+      // wrong answer twice over: it hides the strike and the expiry, and two
+      // different contracts would print identically.
+      name: isContract ? formatContract(position.symbol) : (security?.name ?? position.symbol),
       sector: security?.sector ?? "—",
       last,
       prevClose,
@@ -112,7 +141,7 @@ export function valuePortfolio({
       // Before the first print of a session there is no previous close to
       // measure against, and zero is the honest answer rather than the whole
       // position's P/L masquerading as one day's move.
-      dayPnl: prevClose === null ? 0 : (last - prevClose) * position.qty,
+      dayPnl: prevClose === null ? 0 : (last - prevClose) * position.qty * size,
       weight: gross === 0 ? 0 : (Math.abs(marketValue) / gross) * 100,
       isShort: position.qty < 0,
       stale,
@@ -164,6 +193,12 @@ export function isMarketable(
   price: number,
 ): boolean {
   if (!Number.isFinite(price) || price <= 0) return false;
+  // A stop is never immediate. Its trigger sits on the far side of the market
+  // by construction — the Worker refuses one placed where it would fire at
+  // once — so a stop always rests and the sweep decides. Saying so here is what
+  // makes the ticket read "QUEUE" rather than "BUY" the moment a stop type is
+  // picked, which is the honest label.
+  if (hasStop(orderType)) return false;
   if (orderType === "MARKET") return true;
   if (!Number.isFinite(limitPrice) || (limitPrice as number) <= 0) return false;
 
@@ -186,11 +221,14 @@ export function estimateReservation(input: {
   side: OrderSide;
   orderType: OrderType;
   limitPrice: number | null;
+  /** The trigger, for the three stop types. Null otherwise. */
+  stopPrice?: number | null;
   qty?: number;
   notional?: number;
   referencePrice: number;
 }): { cash: number; qty: number; buffered: boolean } {
   const { side, orderType, limitPrice, referencePrice } = input;
+  const stopPrice = input.stopPrice ?? null;
 
   if (side === "SELL" || side === "COVER") {
     return { cash: 0, qty: input.qty ?? 0, buffered: false };
@@ -204,9 +242,17 @@ export function estimateReservation(input: {
 
   const qty = input.qty ?? 0;
   // A BUY limit cannot fill above its price, so it needs no head-room. A SHORT
-  // limit fills at its price *or higher*, so it does.
-  const capped = orderType === "LIMIT" && side === "BUY";
-  const basis = orderType === "LIMIT" ? (limitPrice ?? 0) : referencePrice;
+  // limit fills at its price *or higher*, so it does. A stop-limit is capped the
+  // same way: the stop decides *when*, the limit still caps *what*.
+  const capped = hasLimit(orderType) && side === "BUY";
+  // A BUY stop sits above the market by definition and becomes a market order
+  // when it gets there, so the last price understates it by the whole distance
+  // to the trigger.
+  const basis = hasLimit(orderType)
+    ? (limitPrice ?? 0)
+    : hasStop(orderType) && stopPrice !== null
+      ? Math.max(stopPrice, referencePrice)
+      : referencePrice;
   const worst = qty * basis * (capped ? 1 : 1 + MARKET_ORDER_BUFFER);
 
   return {

@@ -84,19 +84,42 @@ test("the nightly job runs after the close, in either offset", () => {
   assert.ok(utcMinutes < 24 * 60, `${nightly} crosses into the next UTC day`);
 });
 
-test("the nightly job does not share a minute with the sweep", () => {
+/**
+ * The sweep used to be scheduled around the nightly job so the two never shared
+ * a minute. That stopped being possible when crypto arrived: a coin has no bell,
+ * so a queued limit has to be fillable at 3am on a Sunday, and the sweep runs
+ * continuously.
+ *
+ * The assertion that replaced it is the reason the overlap is safe. Two crons
+ * firing in the same minute are two separate invocations, and scheduled() must
+ * keep dispatching them as independent promises — a shared `await` chain would
+ * mean a slow sweep delaying the snapshot past the exchange date it is stamped
+ * with, which is the thing the old spacing was really protecting.
+ */
+test("the sweep covers every day, because one of the markets never closes", () => {
   const sweep = dispatched().find((cron) => cron.startsWith("*"));
-  const nightly = dispatched().find((cron) => !cron.startsWith("*"));
-  assert.ok(sweep && nightly, "expected one sweep cron and one nightly cron");
+  assert.ok(sweep, "no sweep cron found");
 
-  // The sweep's hour field is a range like "13-21". Two jobs in one minute is
-  // not incorrect — they are separate invocations — but the snapshot wants the
-  // isolate to itself, and a sweep tick outside trading hours is pure waste.
-  const [from, to] = sweep.split(" ")[1]!.split("-").map(Number);
-  const hour = Number(nightly.split(" ")[1]);
+  const [, hours, , , weekdays] = sweep.split(" ");
+  assert.equal(hours, "*", `the sweep must cover every hour, not "${hours}" — crypto has no bell`);
+  assert.equal(weekdays, "*", `the sweep must cover every day, not "${weekdays}"`);
+});
 
+test("the nightly job and the sweep are dispatched independently", () => {
+  const handler = INDEX;
+
+  // They now collide once a day, at 22:15 UTC. Each branch has to own its
+  // failure: a sweep that throws must not take the snapshot with it, and
+  // neither should wait on the other.
+  const waitUntils = handler.match(/ctx\.waitUntil\(/g) ?? [];
   assert.ok(
-    hour < from! || hour > to!,
-    `the nightly job at ${hour}:00 UTC falls inside the sweep window ${from}-${to}`,
+    waitUntils.length >= 3,
+    "the sweep and both nightly jobs should each be their own waitUntil",
+  );
+
+  assert.doesNotMatch(
+    handler,
+    /await\s+sweepRestingOrders\(/,
+    "awaiting the sweep inside scheduled() would let it delay the nightly snapshot",
   );
 });

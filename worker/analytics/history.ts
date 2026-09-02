@@ -801,7 +801,7 @@ async function liveMarks(
 async function loadTrades(supabase: SupabaseClient, portfolioId: string): Promise<TradeRecord[]> {
   const { data, error } = await supabase
     .from("trades")
-    .select("symbol, side, qty, price, notional, executed_at")
+    .select("symbol, side, qty, price, notional, multiplier, executed_at")
     .eq("portfolio_id", portfolioId)
     .order("executed_at", { ascending: true })
     .limit(MAX_TRADES);
@@ -814,6 +814,7 @@ async function loadTrades(supabase: SupabaseClient, portfolioId: string): Promis
     qty: Number(row.qty),
     price: Number(row.price),
     notional: Number(row.notional),
+    multiplier: Number(row.multiplier ?? 1),
     executedAt: row.executed_at as string,
   }));
 }

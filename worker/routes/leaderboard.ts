@@ -136,7 +136,7 @@ leaderboard.get("/:portfolioId", async (c) => {
   if (!portfolio) return c.json({ error: "No such member in this season." }, 404);
 
   const [{ data: positions }, { data: trades }] = await Promise.all([
-    supabase.from("positions").select("symbol, qty, avg_cost").eq("portfolio_id", portfolio.id),
+    supabase.from("positions").select("symbol, qty, avg_cost, multiplier").eq("portfolio_id", portfolio.id),
     supabase
       .from("trades")
       .select("id, symbol, side, qty, price, notional, realized_pnl, executed_at")
@@ -160,6 +160,7 @@ leaderboard.get("/:portfolioId", async (c) => {
       symbol: row.symbol as string,
       qty: Number(row.qty),
       avgCost: Number(row.avg_cost),
+      multiplier: Number(row.multiplier ?? 1),
     })),
     trades: (trades ?? []).map((row) => ({
       id: row.id,
@@ -227,7 +228,7 @@ async function loadClub(supabase: SupabaseClient, seasonId: string): Promise<Clu
   const { data, error } = await supabase
     .from("portfolios")
     .select(
-      "id, user_id, cash, starting_cash, profiles(display_name, role), positions(symbol, qty, avg_cost)",
+      "id, user_id, cash, starting_cash, profiles(display_name, role), positions(symbol, qty, avg_cost, multiplier)",
     )
     .eq("season_id", seasonId)
     .limit(MAX_PORTFOLIOS);
@@ -247,6 +248,7 @@ async function loadClub(supabase: SupabaseClient, seasonId: string): Promise<Clu
         symbol: position.symbol as string,
         qty: Number(position.qty),
         avgCost: Number(position.avg_cost),
+        multiplier: Number(position.multiplier ?? 1),
       })),
     };
   });

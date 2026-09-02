@@ -2,9 +2,9 @@
 
 A paper-trading dashboard that replaces Investopedia for a high-school finance
 club's yearly stock simulation. Each member signs in, gets their own portfolio
-with a starting cash balance, trades US stocks and ETFs by ticker + dollar amount
-or share count, and sees live P/L, sector exposure, and a leaderboard measured
-against SPY, QQQ, and the club average.
+with a starting cash balance, trades US stocks, ETFs, crypto and long options by
+ticker + dollar amount or share count, and sees live P/L, sector exposure, and a
+leaderboard measured against SPY, QQQ, and the club average.
 
 Scale target: 30-100 members. Deployed on Cloudflare Workers.
 
@@ -110,6 +110,62 @@ bar's exchange date first, and everything follows from that:
 
 Pinned by `worker/market/alpaca.test.ts`.
 
+### Alpaca - crypto (free, same key, no market-data subscription)
+
+- `GET data.alpaca.markets/v1beta3/crypto/us/snapshots?symbols=BTC/USD,ETH/USD`
+  Same `latestTrade` / `latestQuote` / `dailyBar` / `prevDailyBar` shape as the
+  stock snapshot, so `quoteFromCryptoSnapshot()` is the equity function with the
+  session branch deleted. There is no session, no `feed` parameter, and no
+  holiday. ~56 pairs.
+- `GET .../v1beta3/crypto/us/bars` — the same bars the equity curve replays
+  against, at `1Day` and `5Min`.
+- `GET paper-api.alpaca.markets/v2/assets?asset_class=crypto` — the pairs, with
+  `min_order_size` and `price_increment`, merged into the nightly KV universe.
+
+**The daily-bar boundary is the one trap.** Alpaca's documentation shows a
+05:00Z stamp in a v1beta1-era example, which would make `exchangeDate()` read it
+correctly. The live v1beta3 feed stamps **00:00Z**, and `exchangeDate()` turns
+that into 20:00 the previous evening — dating every crypto close a session early,
+silently, on a chart that still draws. So a crypto daily bar takes its date from
+its own UTC timestamp and nothing else. Found by calling the API; pinned by
+`crypto.test.ts`.
+
+### Alpaca - options (free, same key, paper-enabled by default)
+
+- `GET data.alpaca.markets/v1beta1/options/snapshots?symbols=<OCC,...>` — prices
+  for held contracts, batched like every other quote.
+- `GET .../v1beta1/options/snapshots/{underlying}?expiration_date=YYYY-MM-DD` —
+  the chain. **One expiration at a time, always.** A whole liquid surface is tens
+  of thousands of contracts; one expiration is ~200 and returns a null page token
+  at `limit=1000`.
+- `GET .../v1beta1/options/bars?symbols=...&timeframe=1Day` — sparse, which the
+  replay already handles by carrying the last close forward.
+- `GET paper-api.alpaca.markets/v2/options/contracts` — strike, expiry, type,
+  multiplier and **open interest**, every numeric as a string. This is the option
+  universe's stand-in for KV, which it cannot use: hundreds of thousands of rows,
+  past the 25MB per-value ceiling and useless for autocomplete.
+
+**`expiration_date_lte` defaults to next weekend.** Omit it and a request for a
+year of expirations answers with this Friday's — a 200, a well-formed body, and a
+rail with one date on it. Nothing about the response says the request was wrong.
+Every contracts call sets the range explicitly.
+
+**There are no greeks and no implied volatility on this key, and there is no
+parameter that produces them.** The fields are absent under the default feed and
+under `feed=indicative`; `feed=opra` answers 403 "OPRA agreement is not signed".
+The chain therefore shows bid, ask, last and open interest, and Δ / IV columns
+are not a missing feature to add back — they need a signed OPRA agreement first.
+Verified against the live API, not the documentation.
+
+**The option quote prefers the midpoint over the last print**, inverting the
+equity precedence. On the indicative feed the quote is real-time and synthetic
+while trades lag OPRA by fifteen minutes: a live response had a book quoted at
+19:59:59Z against a print from 15:17Z. Taking the print — which is right for IEX,
+where prints are real and current — would settle a paper fill against lunchtime.
+The uncrossed-two-sided-book guard is kept and matters more here than anywhere,
+because a chain quotes one side all day on the wings. F2's chain panel states the
+feed once, the same habit as the curve naming whether it was replayed or stored.
+
 ### Finnhub - sector classification only (free tier, 60 req/min)
 
 - `GET finnhub.io/api/v1/stock/profile2?symbol=X` - name, `finnhubIndustry`, logo.
@@ -185,6 +241,59 @@ public signup endpoint, which this app never calls.
 
 ## Domain model
 
+### Asset class is derived from the symbol, never stored
+
+There is no `asset_class` column, and adding one would be a mistake. One pure
+total function in `worker/market/symbols.ts` classifies anything:
+
+```
+contains "/"                           -> CRYPTO    BTC/USD
+^[A-Z][A-Z0-9]{0,5}d{6}[CP]d{8}$      -> OPTION    AAPL260116C00150000
+otherwise                              -> EQUITY    AAPL, BRK.B
+```
+
+Collision is impossible rather than merely unlikely: Alpaca writes class shares
+with a dot (`BRK.B`) and never a slash, and the OCC tail is fifteen fixed
+characters that no listed ticker has. That is what buys a new asset class with no
+backfill, no change to `unique (portfolio_id, symbol)`, and no replay drift.
+
+**Parse an OCC symbol from the right.** Alpaca does not space-pad the root to six
+characters the way raw OCC does, so a fixed offset reads the wrong bytes on
+anything but a four-letter root. `parseContract()` slices fifteen from the end,
+validates the date by UTC round-trip (so February 31st is rejected rather than
+rolled forward to March), and decodes the strike as thousandths.
+
+`src/lib/symbols.ts` mirrors this for the browser — the same one-directional
+mirror the client keeps of the order engine, with the Worker as the authority.
+`symbols.test.ts` reads the mirror as text and fails the build if the three
+regexes, the fifteen-character tail, the contract size or the long-only rule have
+drifted between the two copies.
+
+### The multiplier is one column, and it defaults to 1
+
+An option contract is 100 shares. There is no seam to add that behind — eleven
+places computed money as a bare `qty * price`, in SQL and TypeScript — so
+`positions`, `trades` and `pending_orders` each carry
+`multiplier numeric(20,6) not null default 1`. Every pre-existing row is correct
+at 1, so the equity path is byte-identical after migration 0006. Every valuation
+is `qty * multiplier * price`.
+
+**Storing the premium pre-multiplied was rejected on purpose.** It needs no column
+and no SQL change, and it makes the blotter print 525.00 for a contract the chain
+one panel away prints at 5.25. Two screens disagreeing about the same number is
+the failure this codebase is written to prevent. `price` means the same thing on
+every row; the multiplier is carried beside it. `avg_cost` stays the premium per
+share and `qty` is contracts.
+
+The site that bites if missed is `rebuild_portfolio()`, which rewrites
+`notional` on every trade during an officer's replay. Miss the multiplier there
+and the first void silently divides every option fill's notional by 100, forever.
+`migrations.test.ts` asserts it.
+
+**The route reads the real multiplier from Alpaca, not from the constant.** A
+contract adjusted by a split can be 1000 shares. `multiplierFor()` answers 100
+and is right almost always; `lookupContract()` is what makes it right always.
+
 ### Signed quantity
 
 A short position is stored as **negative `qty`**. This is deliberate and
@@ -215,8 +324,109 @@ liquidation in v1** (deliberate scope cut).
 
 ### Order sides
 
-`BUY`, `SELL`, `SHORT`, `COVER`. Quantity may be entered as fractional shares
-(6 dp) or as a dollar notional, which the Worker converts at the price it fetched.
+`BUY`, `SELL`, `SHORT`, `COVER`, and `EXPIRE` — which is not an order side but
+a trade side, written only by the settlement job. Quantity may be entered as
+fractional shares (6 dp) or as a dollar notional, which the Worker converts at
+the price it fetched, divided by the contract size so a $300 order for a $5.25
+option buys 0 contracts rather than 57.
+
+**Only equities have a short side.** `SHORT` and `COVER` on a coin or a contract
+are refused in `engine.ts` with a sentence and in `place_order()` with `FC003`.
+Crypto has no borrow and no locate to model. A naked short call is worse: the
+flat 1.5x Reg T multiplier would hold about $3 against a $2 premium carrying
+unlimited risk, so refusing is correct rather than merely cautious — the same
+call this codebase already made about forced liquidation. Long options need no
+margin model at all: a long contract is fully paid for, exactly like a stock, so
+the existing buying-power arithmetic is already right once the multiplier is in.
+
+**Crypto trades genuinely 24/7**, so `tradingWindow()` takes the symbol and
+returns `null` for a pair always. Its working orders are GTC only: `DAY` needs a
+close and there is not one, and a market crypto order fills immediately anyway,
+so the only crypto order that ever rests is a GTC limit.
+
+### Five order types, and the one sentence that defines three of them
+
+`MARKET`, `LIMIT`, `STOP`, `STOP_LIMIT`, `TRAILING_STOP`. The last three arrived
+with migration 0007 and they all rest on one line:
+
+```
+a LIMIT buys cheaper than the market and sells dearer.
+a STOP  buys dearer  than the market and sells cheaper.
+```
+
+So a stop is the mirror of a limit, and the trigger direction is the limit
+direction inverted. BUY and COVER are marketable on a limit when the price falls
+to it, and trigger a stop when the price *rises* to it; SELL and SHORT are the
+other way round. `stopFiresOnRise()` is the single definition, mirrored in
+`src/lib/api.ts` for the ticket. Getting it backwards produces an order that
+looks entirely reasonable and fires at exactly the wrong moment — a stop-loss
+that sells into a rally — so `stops.test.ts` enumerates all eight
+side-by-direction combinations rather than sampling them.
+
+**A triggered stop does not fill at its stop price.** It becomes a market order,
+or for `STOP_LIMIT` a limit order, and fills wherever the market is — which on a
+gap is nowhere near the stop. That is why a stop-loss is not a guarantee, and
+the ticket says so in as many words under the field, because it is the single
+most expensive surprise in retail trading and much better met here.
+
+**A stop on the wrong side of the market is refused, not fired instantly.** A
+sell stop above the market would trigger on the next tick, which means the
+member meant a market order. `checkStopPlacement()` says so with the price in
+the sentence. This is a Worker check, not a SQL one: Postgres has no price feed,
+the same split `place_order()` already lives with for its marks.
+
+**A stop is always queued, never filled on the way in.** Its trigger is on the
+far side of the market by construction, so `POST /api/orders` sends every stop
+to `pending_orders` and the sweep decides. The ticket reads "QUEUE" the moment a
+stop type is picked, which is the honest label.
+
+**A stop is entered in shares.** There is no price to convert a dollar amount at
+until the trigger fires, and the conversion runs the wrong way — the cheaper the
+fill, the more shares "$500 of NVDA" turns out to be. Same reason a working
+close is in shares, one step earlier in the order's life.
+
+**Reservations follow the trigger, not the last price.** A BUY stop sits *above*
+the market, so reserving against the last price understates the cost by the
+whole distance to it — the member queues an order they cannot pay for and finds
+out on the day it finally fires. A STOP_LIMIT buy is capped by its limit like
+any other limit: the stop decides *when*, the limit still caps *what*.
+
+**Trailing stops ratchet, and only in the member's favour.** `trail_anchor` is
+the best price the market has offered since placement — the highest for a
+SELL/SHORT trail, the lowest for a BUY/COVER one — and the stop is re-derived
+from it every sweep. The move is `trail_pending_order()` rather than an UPDATE
+in the Worker, because saying "greatest"/"least" inside one locked statement is
+what stops a concurrent sweep walking the stop backwards and firing it early.
+The sweep trails *before* it tests the trigger; the other order would evaluate
+today's price against yesterday's stop and fire one tick late, every time.
+
+**Firing is recorded, not re-derived.** `triggered_at` is stamped once. Without
+it a STOP_LIMIT would un-fire when the price crossed back over its trigger,
+turning a one-way event into something that flickers between two states and
+fills on whichever tick the sweep happened to land on.
+
+### Expiry is cash settlement, and it is a fifth side
+
+An option that never expires is not an option. On its expiration date, after the
+close, a long contract settles at intrinsic value against the underlying's
+official daily close: `max(0, close - strike)` for a call, `max(0, strike - close)`
+for a put. `trades.side` gains `'EXPIRE'` and the price check becomes
+`price > 0 or side = 'EXPIRE'` — a worthless option settles at exactly zero, and
+rounding that up to a cent to satisfy a constraint would be a lie in the ledger.
+`EXPIRE` is its own side rather than a `SELL` because expiry is not a sale, and
+the blotter should say which one happened.
+
+**Settled for cash, never exercised into shares.** Auto-exercising an ITM call
+needs $15,000 for 100 AAPL and can simply fail, leaving a member holding a dead
+contract because their cash was short — which teaches nothing except that the
+software broke. Cash settlement always succeeds and produces the same P/L, which
+is the whole lesson. The cost is that this club cannot demonstrate assignment;
+that is the right cut for a paper season.
+
+**A missing underlying close settles nothing.** The alternative is settling at
+zero, which deletes an in-the-money contract and credits nothing, overnight, in a
+blotter row indistinguishable from an honest expiry. Those positions are left
+alone and reported, and the caller declines to snapshot on top of them.
 
 ### Tables
 
@@ -227,10 +437,12 @@ seasons              id, name, starting_cash, starts_at, ends_at, is_active,
 portfolios           id, season_id, user_id, cash, starting_cash
                                                          UNIQUE(season_id, user_id)
 club_settings        singleton: invite_code, updated_at, updated_by
-positions            id, portfolio_id, symbol, qty (SIGNED), avg_cost
+positions            id, portfolio_id, symbol, qty (SIGNED), avg_cost,
+                     multiplier (1, or 100 for a contract)
                                                          UNIQUE(portfolio_id, symbol)
 trades               id, portfolio_id, symbol, side, qty, price, notional,
-                     realized_pnl, executed_at
+                     realized_pnl, multiplier, executed_at
+                     side in (BUY, SELL, SHORT, COVER, EXPIRE)
 securities           symbol PK, name, sector, industry, asset_type, logo_url,
                      fetched_at
 portfolio_snapshots  portfolio_id, as_of DATE, equity, cash, long_mv, short_mv
@@ -342,9 +554,17 @@ for doing their thinking on a Sunday.
   else is deliberately open, but a resting order is intent, and publishing it
   invites the rest of the club to trade in front of it.
 
-The sweep runs from the cron trigger every minute between 13:00 and 21:59 UTC on
-weekdays — brackets 09:30-16:00 ET in both EDT and EST — and gates itself on the
-exchange calendar, so holidays and the edges cost one cached clock lookup.
+The sweep runs from the cron trigger **every minute of every day**, and gates
+each order on its own asset class — a stock order at 3am on a Sunday stays
+resting, a coin order fills. It was `"* 13-21 * * 1-5"` until crypto arrived,
+which is a window that cannot contain a market that never closes.
+
+A *second*, crypto-only cron was the obvious move and is wrong: it would overlap
+the equity sweep, two sweeps could read the same PENDING row, and the loser's
+`FC002` maps to a non-retryable code that would call `reject_pending_order()` on
+an order that had just filled. One sweep, always. The idle cost stays at one
+indexed query because the sweep selects pending orders *before* it fetches the
+clock and returns early when there are none.
 
 ### Order flow
 
@@ -368,7 +588,41 @@ runner wired up and no direct Postgres connection string in the environment, so
 "apply the migration" means pasting the file in and pressing Run.
 
 Applied so far: `0001_init.sql`, `0002_trading.sql`, `0003_resting_orders.sql`,
-`0004_analytics.sql`, `0005_admin.sql` (all 2026-08-30). Every one is re-runnable — `create or replace`,
+`0004_analytics.sql`, `0005_admin.sql` (all 2026-08-30).
+
+`0006_derivatives.sql` was applied 2026-09-02 and verified: the three
+`multiplier` columns are present and default to 1, `place_order`, `queue_order`
+and `settle_option_expiry` each resolve with `p_multiplier` and have exactly one
+overload, every function is `prosecdef`, EXECUTE is false for `anon` and
+`authenticated` (anon gets 42501 on a payload service_role gets past), and
+`trades_side_allowed` carries `EXPIRE` with `price > 0 or side = 'EXPIRE'`.
+
+`0007_stop_orders.sql` was applied 2026-09-02 and verified: `queue_order` has
+exactly one overload and its identity arguments end
+`p_multiplier, p_stop_price, p_trail_amount, p_trail_percent, p_trail_anchor`;
+`trail_pending_order` and `trigger_pending_order` exist, are `prosecdef`, and
+answer 42501 to `anon` on a payload `service_role` gets a cast error from; the
+five trigger columns are on `pending_orders`; `pending_orders_type_allowed`
+carries all five order types, and the limit/stop/trail constraints each bind to
+exactly the types that own them.
+
+*(The old note follows, kept because the two migrations share every hazard.)*
+
+**`0006_derivatives.sql` was written and applied as described above.** Until it is,
+`/api/portfolio` answers 500 — `loadPortfolio()` selects `positions.multiplier`
+on every read — and F2, F1 and the leaderboard are all dark. Same deliberate hard
+cutover as 0005: a permanent fallback to "assume 1" would be the exact bug the
+column exists to prevent, kept alive forever in a code path nobody reads. It
+trips the destructive-operations warning, because `place_order()` and
+`queue_order()` gain a parameter and are dropped and recreated rather than
+overloaded — a defaulted extra argument would make every call ambiguous, which is
+what 0003 already documents. Verify against `pg_proc` afterwards rather than
+trusting "Success. No rows returned": `place_order` has `p_multiplier`, all four
+functions are `prosecdef`, and EXECUTE is false for `anon` and `authenticated`
+(a dropped function comes back with PUBLIC EXECUTE, so 0006 re-revokes every
+signature explicitly).
+
+Every one is re-runnable — `create or replace`,
 `create ... if not exists`, `drop ... if exists` followed by a create, or a
 guarded insert — so pasting one again is safe if you are ever unsure. Postgres
 runs a multi-statement script as a single implicit transaction, so a migration
@@ -579,6 +833,27 @@ silent: the trigger still fires, the handler matches no branch, and the job
 simply stops. `worker/schedule.test.ts` fails the build when `wrangler.jsonc`
 and `worker/index.ts` disagree in either direction.
 
+### Expiry runs before the snapshot, and a failure cancels it
+
+`worker/orders/expiry.ts` settles every contract expiring today, and
+`worker/index.ts` chains it *ahead of* `snapshotSeason()` inside one
+`waitUntil` rather than dispatching the two independently. That ordering is the
+one load-bearing thing in the scheduler: `mergeSnapshots()` prefers a stored
+snapshot to a replay forever, so a snapshot taken over a half-settled book is a
+wrong number that never washes out — and two independent promises would race, the
+snapshot winning about half the time.
+
+If anything failed to settle — an underlying with no close today, or an RPC that
+refused — the night is skipped entirely and the replay covers it, which is the
+same rule `snapshot.ts` already applies to a bar failure. `expiry.test.ts` reads
+`index.ts` and fails the build if the two are dispatched independently again.
+
+The money is moved by `settle_option_expiry()`, which takes the same
+`SELECT ... FOR UPDATE` on the portfolio that `place_order()` does, writes the
+`EXPIRE` trade, deletes the position, and rejects any resting order left on that
+symbol — a leaked reservation on a contract that no longer exists is invisible
+money the member can never spend again.
+
 ### Sector exposure is gross, not net
 
 `src/lib/sectors.ts` folds positions, quotes and the `securities` table into
@@ -757,6 +1032,40 @@ Bloomberg-terminal density, amber on true black. Dense beats airy everywhere.
 - Function-key top nav: `F1 POSITIONS / F2 TRADE / F3 LEADERBOARD / F4 SECTORS / F5 ADMIN`.
 - Slash key focuses the command bar. Keyboard-first order entry.
 
+**Order entry is two presses, not one.** Review Order, then Place Order, with
+the order frozen on a panel in between — the way a real brokerage ticket works.
+This reverses the original decision, which was that the readback *was* the
+confirmation. That held while the ticket had two order types and one price
+field; with five types, a stop price, a trail and a limit it no longer does, and
+the readback label was still changing under the cursor at the moment of the
+press. Any edit clears the review, so the panel can never describe an order
+other than the one that will be placed.
+
+**Keycaps are actions; underlines are modes.** BUY, MKT, GTC, SHRS are things
+you do, and they are filled keycaps. The instrument selector on F2 and the
+expiration rail on the chain are things you are *in*, and they are underlined
+text. Phase 8 added two controls to one screen and they read as one new
+vocabulary rather than two — spending a second visual idiom on the second
+control would have been the expensive way to say the same thing.
+
+**F2 gains exactly one control and no height.** `EQUITY · OPTION · CRYPTO` rides
+the existing Ticker label row, so a member who never touches it sees the screen
+they had. Everything else is the same ticket showing less: the field is TICKER,
+UNDERLYING or PAIR, the sides that do not apply are disabled with the reason on
+hover rather than removed (removing them would move the row under the cursor),
+the unit keycap is SHRS, CTRS or UNIT, and crypto drops the DAY/GTC row
+entirely because there is nothing to choose.
+
+**The chain is a ladder, not a grid.** Calls left, puts right, strikes down the
+middle, the two halves mirrored so bid and ask sit against the axis on both
+sides. That is the vernacular every chain uses, and it exists because the
+question is "at this strike, what do the two sides cost" — which a flat table
+makes you scan for. The strike is amber because it is the axis and amber is
+interface. In-the-money contracts are tinted `panel-hi` and **never** green or
+red, which mean gain and loss on every other screen. A hairline labelled with the
+underlying's price is drawn between the two strikes that bracket it, and the
+ladder opens scrolled to it.
+
 Load the `frontend-design` skill before building UI, and the `dataviz` skill
 before writing any chart code. (`dataviz` is not installed on this machine —
 `frontend-design` is. Charts follow the colour rule below in its place.)
@@ -795,11 +1104,20 @@ worker/analytics/snapshot.ts    nightly portfolio + benchmark rows; cron-driven
 worker/lib/portfolio.ts         active season + portfolio + positions, read side
 worker/lib/leaderboard.ts       club ranking arithmetic: value, rank, summarise
 worker/lib/club.ts              the invite code: read, rotate, generate, compare
+worker/market/symbols.ts        the classifier: OCC parse/format, class, multiplier
+worker/market/crypto.ts         Alpaca v1beta3 crypto: snapshots, bars, assets
+worker/market/options.ts        Alpaca v1beta1 options: chain, contracts, bars
+worker/market/router.ts         one PriceProvider over three classes, merged
+worker/market/chain.ts          cached chain + contract lookup, two TTLs
+worker/orders/expiry.ts         settles expiring contracts for cash; cron-driven
+worker/orders/stops.test.ts     the eight stop directions, and the SQL ratchet
 worker/routes/                  auth, quotes, market, orders, portfolio, leaderboard, admin
 supabase/migrations/*.sql       schema, RLS policies, place_order() RPC
 scripts/check-client-env.ts     build-time guard on the two VITE_ values
 src/lib/                        supabase client, API client, formatters, valuation
 src/lib/sectors.ts              positions -> gross sector exposure, client-side
+src/lib/symbols.ts              the classifier, mirrored for the browser
+src/hooks/useChain.ts           one underlying's chain, 20s poll, debounced
 src/hooks/useQuotes.ts          TanStack Query, 20s refetchInterval
 src/hooks/usePortfolio.ts       holdings + blotter + the place-order mutation
 src/hooks/useHistory.ts         the equity curve, 5-minute poll (60s on 1D), range in state
@@ -807,7 +1125,8 @@ src/hooks/useLeaderboard.ts     the standings, 30s poll, plus one member's book
 src/hooks/useAdmin.ts           the console's one read and every officer mutation
 src/components/terminal/        Panel, DataGrid, StatStrip, OrderTicket, Blotter,
                                 WorkingOrders, SymbolSearch, SectorBars, ReturnBar,
-                                MemberBook, MemberRoster, Corrections, AdminControls
+                                OptionChain, MemberBook, MemberRoster, Corrections,
+                                AdminControls
 src/components/charts/          EquityCurve panel + lazy-loaded CurvePlot
 src/routes/                     Login, Positions, Trade, Leaderboard, Sectors, Admin
 ```
@@ -838,13 +1157,20 @@ GET  /api/quotes?symbols=A,B          batched, cached prices
 GET  /api/market/clock                open/closed, next open, next close
 GET  /api/market/symbols?q=           ticker autocomplete
 GET  /api/market/securities?symbols=  names and sectors
+GET  /api/market/chain?underlying=&expiration=
+                                      one underlying's expirations, and one of
+                                      them priced. Front month by default
 GET  /api/market/universe             asset-list size and last sync
 POST /api/market/universe/sync        force a resync (admin only)
 GET  /api/portfolio                   cash, positions, season. Deliberately unpriced
 GET  /api/portfolio/history?range=    equity curve vs SPY, QQQ, club, in dollars.
                                       1D is one session at 5-minute resolution
 POST /api/portfolio/snapshot          run tonight's snapshot now (admin only)
-POST /api/orders                      place an order. No price field — see rule 3
+POST /api/orders                      place an order. No price field — see rule 3.
+                                      orderType MARKET | LIMIT | STOP |
+                                      STOP_LIMIT | TRAILING_STOP; a stop carries
+                                      stopPrice, a trail carries trailAmount or
+                                      trailPercent. Every stop is queued
 GET  /api/orders                      trade blotter, newest first
 GET  /api/orders/working              resting orders (owner-only)
 DELETE /api/orders/working/:id        cancel, releasing the reservation
@@ -898,7 +1224,20 @@ step 6. Build and deploy are unaffected.
       the upserts land on.
 - [ ] **Phase 7 (deploy)** - create the KV namespace, set the secrets,
       `npm run deploy`, then walk the checklist at the end of `DEPLOYMENT.md`.
-      Every migration is applied already; nothing is owed to the database.
+- [x] **Phase 8a (code)** - crypto, and the plumbing both new classes share: the
+      symbol classifier, the `multiplier` column, the routing provider, the
+      24/7 sweep, and F2's instrument selector.
+- [x] **Phase 8b (code)** - options: the chain endpoint and panel, OCC
+      validation on the orders route, and cash settlement at expiry chained
+      ahead of the nightly snapshot.
+- [x] **Phase 9 (code)** - the order ticket a real brokerage has: stop,
+      stop-limit and trailing-stop types, a Review/Place confirmation step, and
+      the crypto minimum-order-size floor surfaced before the press rather than
+      at the fill. Adds migration `0007_stop_orders.sql`.
+- [x] **Phase 9 (deploy)** - `0007_stop_orders.sql` applied and verified
+      2026-09-02.
+- [x] **Phase 8 (deploy)** - `0006_derivatives.sql` applied and verified
+      2026-09-02.
 
 ## Reference docs
 

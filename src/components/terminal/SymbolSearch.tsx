@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api, type SymbolMatch } from "@/lib/api";
+import type { AssetClass } from "@/lib/symbols";
 
 interface SymbolSearchProps {
   value: string;
@@ -9,6 +10,14 @@ interface SymbolSearchProps {
   onCommit?: (match: SymbolMatch | null) => void;
   autoFocus?: boolean;
   disabled?: boolean;
+  /** What an empty field suggests. Differs per asset class — AAPL, BTC/USD. */
+  placeholder?: string;
+  /**
+   * Which instrument to search. The crypto ticket must not offer stocks, and an
+   * option's underlying must not be a coin, so this is never left off from the
+   * order ticket — only the command bar means "anything".
+   */
+  assetClass?: AssetClass;
 }
 
 /**
@@ -29,6 +38,8 @@ export function SymbolSearch({
   onCommit,
   autoFocus,
   disabled,
+  placeholder = "NVDA",
+  assetClass,
 }: SymbolSearchProps) {
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
@@ -44,8 +55,8 @@ export function SymbolSearch({
   }, [value]);
 
   const { data } = useQuery({
-    queryKey: ["symbols", debounced],
-    queryFn: () => api.searchSymbols(debounced, 8),
+    queryKey: ["symbols", debounced, assetClass ?? "ANY"],
+    queryFn: () => api.searchSymbols(debounced, 8, assetClass),
     enabled: debounced.trim().length > 0 && !disabled,
     // The asset list is rewritten once a night, so a match found now is still a
     // match in an hour.
@@ -123,8 +134,12 @@ export function SymbolSearch({
         autoFocus={autoFocus}
         autoComplete="off"
         spellCheck={false}
-        maxLength={10}
-        placeholder="NVDA"
+        // An OCC contract is twenty-one characters at its longest
+        // (GOOGL260116P00150000), so the old ten-character cap would silently
+        // truncate a pasted contract into an equity ticker that then fails to
+        // price. The classifier is what refuses junk, not the length.
+        maxLength={21}
+        placeholder={placeholder}
         role="combobox"
         aria-expanded={open && results.length > 0}
         aria-controls={listId}

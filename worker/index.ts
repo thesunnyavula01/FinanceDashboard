@@ -11,6 +11,7 @@ import { admin } from "./routes/admin.ts";
 import { syncUniverse } from "./market/universe.ts";
 import { sweepRestingOrders } from "./orders/sweep.ts";
 import { snapshotSeason } from "./analytics/snapshot.ts";
+import { bookIsSettled, settleExpiries } from "./orders/expiry.ts";
 
 /**
  * The cron expressions, matched against `event.cron` so the two schedules never
@@ -19,7 +20,7 @@ import { snapshotSeason } from "./analytics/snapshot.ts";
  * unrecognised expression is logged rather than quietly falling through to
  * whichever branch happens to be last.
  */
-const SWEEP_CRON = "* 13-21 * * 1-5";
+const SWEEP_CRON = "* * * * *";
 const NIGHTLY_CRON = "15 22 * * 1-5";
 
 const app = new Hono<AppBindings>();
@@ -69,20 +70,26 @@ export default {
   async scheduled(event: ScheduledController, env: Env, ctx: ExecutionContext) {
     console.log(`Cron ${event.cron} fired at ${new Date(event.scheduledTime).toISOString()}`);
 
-    // The minute-by-minute sweep. It runs on every weekday tick between 13:00
-    // and 21:59 UTC and gates itself on the exchange calendar, so a holiday or
-    // the hour either side of the session costs one cached clock lookup and
-    // nothing else. This is what turns a weekend queue into Monday's fills.
+    // The minute-by-minute sweep. It ticks every minute of every day now that
+    // crypto is tradable, and gates each order on its own asset class: a stock
+    // order at 3am on a Sunday stays resting, a coin order fills. The idle cost
+    // is one indexed query for pending orders, which returns nothing and stops
+    // there before the clock is even fetched. This is what turns a weekend
+    // queue into Monday's fills.
     if (event.cron === SWEEP_CRON) {
       ctx.waitUntil(
         sweepRestingOrders(env, (p) => ctx.waitUntil(p))
           .then((result) => {
             // Only worth a log line when something actually happened; otherwise
             // this would write 540 "market closed" lines a day.
-            if (result.filled || result.rejected || result.expired) {
+            // Deliberately not gated on `trailed`: a working trailing stop
+            // ratchets on most ticks, and logging that would write a line a
+            // minute forever. A trigger is an event and is worth one.
+            if (result.filled || result.rejected || result.expired || result.triggered) {
               console.log(
-                `Sweep: ${result.filled} filled, ${result.rejected} rejected, ` +
-                  `${result.expired} expired, ${result.resting} still resting.`,
+                `Sweep: ${result.filled} filled, ${result.triggered} triggered, ` +
+                  `${result.rejected} rejected, ${result.expired} expired, ` +
+                  `${result.resting} still resting (${result.trailed} trails moved).`,
               );
             }
           })
@@ -102,13 +109,35 @@ export default {
         .catch((err) => console.error("Universe sync failed:", err)),
     );
 
-    // One portfolio_snapshots row per member plus SPY and QQQ closes, upserted
-    // on the unique constraints so a re-run is harmless. It gates itself on
-    // whether the exchange actually held a session, so holidays cost one bar
-    // request and write nothing.
+    // Expiry first, then the snapshot — chained rather than parallel, and this
+    // is the one ordering in the file that is load-bearing. A long contract
+    // expiring today is cash after the close, and `mergeSnapshots()` prefers a
+    // stored snapshot to a replay forever, so a snapshot taken over a
+    // half-settled book is a wrong number that never washes out. If anything
+    // fails to settle, the night is skipped and the replay covers it.
     ctx.waitUntil(
-      snapshotSeason(env, (p) => ctx.waitUntil(p))
+      settleExpiries(env, (p) => ctx.waitUntil(p))
+        .then((expiry) => {
+          if (expiry.settled || expiry.skipped || expiry.failed) {
+            console.log(
+              `Expiry ${expiry.asOf}: ${expiry.settled} settled ` +
+                `(${expiry.worthless} worthless, ${expiry.credited} credited to cash), ` +
+                `${expiry.skipped} unpriced, ${expiry.failed} failed.`,
+            );
+          }
+
+          if (!bookIsSettled(expiry)) {
+            console.error(
+              "Snapshot skipped: contracts expired today that could not be settled. " +
+                "The equity curve falls back to the replay for tonight.",
+            );
+            return null;
+          }
+
+          return snapshotSeason(env, (p) => ctx.waitUntil(p));
+        })
         .then((result) => {
+          if (!result) return;
           if (!result.ran) {
             console.log(`Snapshot skipped: ${result.reason ?? "nothing to record."}`);
             return;
@@ -118,7 +147,7 @@ export default {
               `${result.benchmarks} benchmark closes, ${result.unpriced} positions at cost.`,
           );
         })
-        .catch((err) => console.error("Snapshot failed:", err)),
+        .catch((err) => console.error("Expiry or snapshot failed:", err)),
     );
   },
 } satisfies ExportedHandler<Env>;

@@ -470,12 +470,21 @@ export class AlpacaOptionsProvider {
    * Two upstream calls, deliberately: the contracts endpoint is the only source
    * of open interest and of the multiplier, and the data endpoint is the only
    * source of a price. Neither carries the other's fields.
+   *
+   * `today` is the session every row is priced against, read once so a chain
+   * cannot straddle midnight halfway down the ladder. It is a parameter for the
+   * same reason `quoteFromOptionSnapshot()` takes one: a test that stamps a
+   * fixture with a fixed date and lets this read the wall clock passes on the
+   * day it is written and takes the outside-the-session branch every day after.
    */
-  async chain(underlying: string, expiration: string): Promise<ChainQuote[]> {
+  async chain(
+    underlying: string,
+    expiration: string,
+    today = exchangeDate(),
+  ): Promise<ChainQuote[]> {
     const metas = await this.contracts(underlying, expiration);
     if (metas.length === 0) return [];
 
-    const today = exchangeDate();
     const prices = new Map<string, OptionSnapshot>();
 
     // The chain is fetched by underlying rather than by symbol list: it is one

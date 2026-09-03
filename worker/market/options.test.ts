@@ -291,7 +291,13 @@ test("a chain is fetched one expiration at a time, never whole", async () => {
   let rows;
   try {
     const provider = new AlpacaOptionsProvider({ keyId: "k", secretKey: "s", feed: "iex" });
-    rows = await provider.chain("AAPL", "2026-09-18");
+    // Pinned to the fixture's own session, like every other dated assertion in
+    // this file. Left to the wall clock the snapshot below is yesterday's by
+    // the day after this was written, `chain()` takes the outside-the-session
+    // branch, and the mark quietly becomes the daily close instead of the
+    // midpoint — which is a real rule of this adapter, tested above, firing on
+    // a fixture that no longer means what it says.
+    rows = await provider.chain("AAPL", "2026-09-18", TODAY);
   } finally {
     globalThis.fetch = original;
   }

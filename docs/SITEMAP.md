@@ -6,10 +6,10 @@ answers it directly — the Worker is never invoked for a page request — and
 router, not of a directory.
 
 **There is no `sitemap.xml`, and adding one would be a mistake.** The app is
-auth-gated end to end: with no session, `App` renders `Login` instead of the
-shell at *any* address, so a crawler that followed a sitemap would find one
-login form six times over. Nothing here is public, indexable, or shareable by
-URL.
+auth-gated to one address: with no session, `App` renders `Login` instead of
+the shell at every path except `/legal`, so a crawler that followed a sitemap
+would find one login form six times over and two documents once. Nothing else
+here is public, indexable, or worth sharing by URL.
 
 ---
 
@@ -19,12 +19,14 @@ Rendered around every authenticated screen, in `src/App.tsx`:
 
 ```
 StatusRail      app name · market session · connection · display name · role · sign out
-FunctionNav     F1 … F5, the screen switcher
+FunctionNav     F1 … F5, the screen switcher, and Legal at the far end
 <main>          the routed screen
 CommandBar      "/" to focus. A screen name, a ticker, or a whole order
 ```
 
-Unauthenticated there is no shell at all. `Login` takes the full viewport.
+Unauthenticated there is no shell at all. `Login` takes the full viewport — at
+every address but `/legal`, which renders either way, because the terms have to
+be readable before there is an account to agree to them with.
 
 ---
 
@@ -38,9 +40,10 @@ Unauthenticated there is no shell at all. `Login` takes the full viewport.
 | F3 | `/leaderboard` | Leaderboard | `src/routes/Leaderboard.tsx` | members |
 | F4 | `/sectors` | Sectors | `src/routes/Sectors.tsx` | members |
 | F5 | `/admin` | Admin | `src/routes/Admin.tsx` | officers |
+| — | `/legal`, `/legal/:doc` | Legal | `src/routes/Legal.tsx` | anyone |
 | — | `*` | Not found | `src/routes/NotFound.tsx` | members |
 
-Six paths, and that is the whole client surface. `screensFor()` in
+Eight paths, and that is the whole client surface. `screensFor()` in
 `FunctionNav.tsx` filters F5 out for a member — the route still resolves and
 the API still checks, because hiding a link is presentation and not a
 permission.
@@ -140,6 +143,24 @@ MemberRoster        promote and demote
 Corrections         void or amend a fill, then replay the portfolio
 ```
 
+### `/legal` — Terms of use and privacy policy
+
+Two documents behind one panel with two tabs, and **deliberately not an F6**.
+A function key would rank a legal document alongside the trade ticket, and the
+member who wants it is never looking for it in a hurry. It is reached from the
+quiet end of the nav row, from the login screen, and from the command bar.
+
+`/legal/terms` and `/legal/privacy` are separate addresses rather than one
+screen with a hidden tab — this is the one thing in the app somebody genuinely
+pastes into a chat, and the link has to land on the document it names. An
+unknown slug shows the terms rather than a 404.
+
+It is also the only screen that is prose, so it is the one place the grid's
+density loses an argument: the panel hugs a 68-character measure and the body
+is set at 13px on 1.7. The two tables — what is held about you, and who else
+touches it — are the point of the privacy document, because those are the only
+two questions anyone opens one with.
+
 ### `*` — Not found
 
 A 404 panel pointing back to F1 and the command bar. Unknown *API* paths never
@@ -157,6 +178,7 @@ The terminal is keyboard-first, so most navigation never touches an anchor.
 | `F1`–`F5` | switch screens; suppressed while a text field has focus |
 | `/` | focus the command bar |
 | `POSITIONS`, `F3`, … | a screen name or key in the command bar navigates |
+| `LEGAL`, `TERMS`, `PRIVACY` | the legal screen, which has no key of its own |
 | `NVDA` | any other word is a ticker lookup, priced inline |
 | `BUY 10 NVDA`, `SHORT $500 TSLA @ 240` | opens `/trade` with the ticket filled |
 | row click | Positions and Sectors both land on the ticket |

@@ -92,6 +92,26 @@ export function FunctionNav({ isAdmin = false }: { isAdmin?: boolean }) {
           )}
         </NavLink>
       ))}
+
+      {/*
+        Not a screen, and deliberately not a sixth key: F6 would rank a legal
+        document alongside the trade ticket, and the member who wants it is
+        never looking for it in a hurry. It rides the empty end of a row that
+        already exists, so it costs no height — a keycap would have claimed it
+        is somewhere you go, and this is somewhere you refer to.
+      */}
+      <NavLink
+        to="/legal"
+        className={({ isActive }) =>
+          `row ml-auto flex items-center border-l border-line px-3 transition-colors ${
+            isActive ? "text-accent" : "text-ink-faint hover:text-ink-dim"
+          }`
+        }
+      >
+        <span className="label" style={{ color: "inherit" }}>
+          Legal
+        </span>
+      </NavLink>
     </nav>
   );
 }

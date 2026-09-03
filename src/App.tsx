@@ -11,6 +11,7 @@ import { Trade } from "@/routes/Trade";
 import { Leaderboard } from "@/routes/Leaderboard";
 import { Sectors } from "@/routes/Sectors";
 import { Admin } from "@/routes/Admin";
+import { Legal } from "@/routes/Legal";
 import { NotFound } from "@/routes/NotFound";
 
 export function App() {
@@ -42,8 +43,17 @@ export function App() {
     );
   }
 
+  // Signed out, every address is the login screen — with one exception. The
+  // terms and the privacy policy have to be readable *before* there is an
+  // account to agree to them with, and the sign-up form links straight to them.
   if (!session) {
-    return <Login />;
+    return (
+      <Routes>
+        <Route path="/legal" element={<Legal />} />
+        <Route path="/legal/:doc" element={<Legal />} />
+        <Route path="*" element={<Login />} />
+      </Routes>
+    );
   }
 
   return (
@@ -68,6 +78,8 @@ export function App() {
           <Route path="/leaderboard" element={<Leaderboard />} />
           <Route path="/sectors" element={<Sectors />} />
           <Route path="/admin" element={<Admin />} />
+          <Route path="/legal" element={<Legal />} />
+          <Route path="/legal/:doc" element={<Legal />} />
           <Route path="*" element={<NotFound />} />
         </Routes>
       </main>

@@ -8,6 +8,18 @@ import { screensFor } from "./FunctionNav";
 type Response = { tone: "ok" | "error" | "busy"; text: string } | null;
 
 /**
+ * The legal screen is not in `screens` — it has no function key and never
+ * should. But the command bar is how this terminal navigates, and a
+ * destination it cannot reach is one a member cannot find. None of these three
+ * words is a listed ticker, so nothing legitimate is shadowed.
+ */
+const LEGAL_WORDS: Record<string, string> = {
+  LEGAL: "/legal",
+  TERMS: "/legal/terms",
+  PRIVACY: "/legal/privacy",
+};
+
+/**
  * `BUY 10 NVDA` or `SHORT $500 TSLA`.
  *
  * A bare number is share count and a `$` prefix is dollars, which is the
@@ -148,10 +160,18 @@ export function CommandBar({ isAdmin = false }: { isAdmin?: boolean }) {
       return;
     }
 
+    const legalPath = LEGAL_WORDS[command];
+    if (legalPath) {
+      navigate(legalPath);
+      setResponse({ tone: "ok", text: command });
+      setEntry("");
+      return;
+    }
+
     if (command === "HELP" || command === "?") {
       setResponse({
         tone: "ok",
-        text: `Screens: ${screens.map((s) => s.label.toUpperCase()).join("  ")}  ·  a ticker  ·  or an order: BUY 10 NVDA / SHORT $500 TSLA / BUY 10 NVDA @ 170`,
+        text: `Screens: ${screens.map((s) => s.label.toUpperCase()).join("  ")}  ·  LEGAL  ·  a ticker  ·  or an order: BUY 10 NVDA / SHORT $500 TSLA / BUY 10 NVDA @ 170`,
       });
       setEntry("");
       return;

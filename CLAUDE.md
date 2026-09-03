@@ -1029,7 +1029,8 @@ Bloomberg-terminal density, amber on true black. Dense beats airy everywhere.
   columns stay aligned as values tick.
 - Labels and column headers in Inter, uppercase, letter-spaced, amber-dimmed.
 - 28px grid rows, 12px base type. Data density is the aesthetic - resist padding.
-- Function-key top nav: `F1 POSITIONS / F2 TRADE / F3 LEADERBOARD / F4 SECTORS / F5 ADMIN`.
+- Function-key top nav: `F1 POSITIONS / F2 TRADE / F3 LEADERBOARD / F4 SECTORS / F5 ADMIN`,
+  with `LEGAL` at the far end of the same row, keyless.
 - Slash key focuses the command bar. Keyboard-first order entry.
 
 **Order entry is two presses, not one.** Review Order, then Place Order, with
@@ -1047,6 +1048,31 @@ expiration rail on the chain are things you are *in*, and they are underlined
 text. Phase 8 added two controls to one screen and they read as one new
 vocabulary rather than two — spending a second visual idiom on the second
 control would have been the expensive way to say the same thing.
+
+**And plain dim text is a reference.** `LEGAL` rides the far end of the
+function-key row with no keycap and no key, because it is neither an action nor
+a mode — it is somewhere you look something up. There is deliberately **no F6**:
+a function key would rank the terms of use alongside the trade ticket, and the
+member who wants them is never in a hurry. It costs no height, since the row was
+already there.
+
+**The legal screen is the one screen that is a document.** `/legal/terms` and
+`/legal/privacy` are two tabs of one panel and two real addresses — the one
+thing here anybody pastes into a chat, so the link has to land on the document
+it names. It renders signed *out* as well as in, because the terms have to be
+readable before there is an account to agree to them with, and the sign-up
+button links to both directly above it. That makes it the single path where
+`App` does not fall through to `Login`, which is why `docs/SITEMAP.md` no longer
+claims the app is auth-gated at every address.
+
+Density loses one argument there and only there: a clause set at the grid's 1.35
+leading across a full-width panel runs past two hundred characters and nobody
+reads it, so the panel hugs a 68-character measure and the body is 13px on 1.7.
+The privacy document answers in two grids — what is held about you and who else
+touches it — because those are the only two questions anyone opens a privacy
+policy with, and this app answers everything else in a grid already. Keep them
+true: they name `profiles`, `pending_orders`, and the four processors by hand,
+so a new table or a fifth service means editing that screen too.
 
 **F2 gains exactly one control and no height.** `EQUITY · OPTION · CRYPTO` rides
 the existing Ticker label row, so a member who never touches it sees the screen
@@ -1128,7 +1154,8 @@ src/components/terminal/        Panel, DataGrid, StatStrip, OrderTicket, Blotter
                                 OptionChain, MemberBook, MemberRoster, Corrections,
                                 AdminControls
 src/components/charts/          EquityCurve panel + lazy-loaded CurvePlot
-src/routes/                     Login, Positions, Trade, Leaderboard, Sectors, Admin
+src/routes/                     Login, Positions, Trade, Leaderboard, Sectors, Admin,
+                                Legal
 ```
 
 Recharts is the only heavy dependency in the bundle, so it is behind a

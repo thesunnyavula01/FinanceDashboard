@@ -1,4 +1,5 @@
 import { useState, type FormEvent, type ReactNode } from "react";
+import { Link } from "react-router-dom";
 import { useAuth } from "@/lib/auth";
 import { isConfigured, missingConfig } from "@/lib/supabase";
 
@@ -27,6 +28,8 @@ function Field({
 const inputClass =
   "num mt-1 w-full border border-line bg-canvas px-2 py-1.5 text-ink " +
   "placeholder:text-ink-faint focus:border-accent focus:outline-none";
+
+const legalLink = "text-accent-dim underline underline-offset-2 hover:text-accent";
 
 /**
  * The gate. Nothing else in the app renders until this passes.
@@ -206,13 +209,41 @@ export function Login() {
                     : "Create portfolio"}
               </span>
             </button>
+
+            {/*
+              Consent sits against the button that gives it, not in a footer
+              under the panel. The second sentence is the one thing a new
+              member would otherwise find out by being surprised.
+            */}
+            {mode === "signup" && (
+              <p className="text-ink-faint">
+                Creating a portfolio accepts the{" "}
+                <Link to="/legal/terms" className={legalLink}>
+                  terms of use
+                </Link>{" "}
+                and the{" "}
+                <Link to="/legal/privacy" className={legalLink}>
+                  privacy policy
+                </Link>
+                . Your display name and everything you trade are visible to the rest of the
+                club.
+              </p>
+            )}
           </form>
         </div>
 
         <p className="mt-3 text-ink-faint">
           {mode === "signin" ? (
             <>
-              No account yet? Choose <span className="text-ink-dim">New member</span> above.
+              No account yet? Choose <span className="text-ink-dim">New member</span> above.{" "}
+              <Link to="/legal/terms" className={legalLink}>
+                Terms
+              </Link>{" "}
+              and{" "}
+              <Link to="/legal/privacy" className={legalLink}>
+                privacy
+              </Link>
+              .
             </>
           ) : (
             <>Your starting cash is set by the club officer who opened the season.</>

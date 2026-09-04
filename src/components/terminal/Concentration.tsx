@@ -1,5 +1,6 @@
 import { useMemo, type ReactNode } from "react";
 import { Panel } from "./Panel";
+import { formatContract } from "@/lib/symbols";
 import { money, weight as formatWeight } from "@/lib/format";
 import { ALL_SECTORS, CONCENTRATION_LIMIT, type SectorExposure } from "@/lib/sectors";
 import type { PortfolioTotals, ValuedPosition } from "@/lib/portfolio";
@@ -170,6 +171,25 @@ function Metric({
   );
 }
 
+/**
+ * A holding, in one line of prose.
+ *
+ * Named the way every other screen names it: a contract reads
+ * "AAPL 16JAN26 150C" here, in F4's drill-down and in F1's grid, because a
+ * rail printing AAPL260116C00150000 next to a grid printing the pretty form
+ * makes a member check whether they are two different positions.
+ *
+ * The name is appended only when it says something the symbol did not.
+ * `loadPortfolio` already sets a contract's `name` to its formatted symbol —
+ * "Apple Inc." is the underlying's name, not the contract's — so spelling both
+ * out prints the same seventeen characters twice with a separator between
+ * them, which reads as a bug rather than as a detail.
+ */
+function describe(position: ValuedPosition): string {
+  const symbol = formatContract(position.symbol);
+  return position.name === symbol ? symbol : `${symbol} · ${position.name}`;
+}
+
 interface Summary {
   gross: number;
   sectorCount: number;
@@ -239,7 +259,7 @@ function summarise({
     topThreeWeight: sectors.slice(0, 3).reduce((sum, sector) => sum + sector.weight, 0),
     effectiveBets: herfindahl === 0 ? 0 : 1 / herfindahl,
     largestWeight: largest?.weight ?? 0,
-    largestLabel: largest ? `${largest.symbol} · ${largest.name}` : "—",
+    largestLabel: largest ? describe(largest) : "—",
     fundShare: classified === 0 || knownGross === 0 ? null : (fundGross / knownGross) * 100,
     fundCount,
     classified,

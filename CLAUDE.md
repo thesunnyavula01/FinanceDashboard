@@ -907,6 +907,30 @@ previous close, which is a different thing from a flat day.
 they are fully invested. It sits in neutral panel grey, so it reads as the
 absence of a bet rather than a flat one.
 
+**A contract is named the same way on all four panels.** The map's tiles, the
+concentration rail and the drill-down all print `formatContract` — the same
+"AAPL 16JAN26 150C" F1's grid and the blotter print — and keep the stored OCC
+symbol in the tooltip, because that is what the API takes and what settles the
+money. F4 used to print the raw `AAPL260116C00150000` on all three, next to an
+F1 the member had just come from, and two screens disagreeing about what one
+holding is called is the same failure as two screens disagreeing about a
+number.
+
+The map is the one place the name may not fit, and it does not truncate.
+"AAPL 16JAN26 150C" is four times the width of "AAPL", so a fixed 38px gate
+tuned for a ticker draws "AAPL 1…" — not a shorter name but a *different and
+wrong* one, since the strike is what got cut. The gate is measured from the
+label that will actually be painted, and a tile too narrow for it falls back to
+what the map already does with every small tile: colour, area and a tooltip,
+with the drill-down below as the authority. The day figure was implicitly
+gated on the symbol fitting — 52px of figure is wider than 38px of ticker — so
+that is now stated, or a tile could draw a bare percentage belonging to nothing.
+
+`loadPortfolio` already sets a contract's `name` to its formatted symbol, since
+"Apple Inc." is the underlying's name and not the contract's, so the
+concentration rail appends the name only when it says something the symbol did
+not.
+
 **Effective bets** is the inverse Herfindahl over the sector weights,
 `1 / Σ(wᵢ²)`. Six sectors with one of them at 80% is not six bets, and this is
 the figure that says so. The panel prints what an even split would read, because

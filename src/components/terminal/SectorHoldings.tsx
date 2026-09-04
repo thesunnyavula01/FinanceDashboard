@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { Panel } from "./Panel";
 import { DataGrid, type Column } from "./DataGrid";
 import { Value } from "./Value";
+import { formatContract } from "@/lib/symbols";
 import { money, moneySigned, percent, signColor, weight as formatWeight } from "@/lib/format";
 import { positionDayReturn, type SectorExposure } from "@/lib/sectors";
 import type { ValuedPosition } from "@/lib/portfolio";
@@ -57,7 +58,18 @@ export function SectorHoldings({
       sortValue: (r) => r.symbol,
       render: (r) => (
         <span className="flex items-center gap-1.5">
-          <span className="num font-medium text-ink">{r.symbol}</span>
+          {/*
+            The same treatment F1's grid gives the same value, deliberately: a
+            contract is shown as a contract, the stored OCC symbol stays one
+            hover away because it is what settles the money, and the pretty
+            form never wraps out of a fixed-height row. This grid is the finest
+            resolution on F4 and F1 is where a member came from — the two
+            printing one holding two different ways is the disagreement this
+            codebase is written to avoid.
+          */}
+          <span className="num font-medium whitespace-nowrap text-ink" title={r.symbol}>
+            {formatContract(r.symbol)}
+          </span>
           {r.isShort && (
             <span className="label text-loss" title="Short position">
               S

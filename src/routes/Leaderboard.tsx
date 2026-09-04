@@ -59,13 +59,18 @@ export function Leaderboard() {
       width: "13rem",
       sortValue: (r) => r.displayName,
       render: (r) => (
-        <span className="flex items-center gap-1.5">
+        // `min-w-0` on the flex row, or the name refuses to truncate and pushes
+        // the bar out of the panel on the first member called Christopher.
+        <span className="flex min-w-0 items-center gap-1.5">
           <span className="truncate text-ink">{r.displayName}</span>
-          {r.userId === session?.user.id && <span className="keycap">YOU</span>}
+          {r.userId === session?.user.id && <span className="keycap shrink-0">YOU</span>}
         </span>
       ),
     },
     {
+      // The bar is the screen and it stays at every width. A phone showing a
+      // sorted column of percentages is the exact thing this screen was drawn
+      // to replace.
       key: "spread",
       header: "Return vs market",
       sortValue: (r) => r.totalReturn,
@@ -91,10 +96,14 @@ export function Leaderboard() {
       ),
     },
     {
+      // The bar beside it already draws this: the hairline is SPY and the
+      // gap to it is the excess. On a phone the figure is the one of the two
+      // that can go without the screen losing its argument.
       key: "excess",
       header: "vs SPY",
       align: "right",
       width: "5.5rem",
+      hideOnMobile: true,
       sortValue: (r) => r.excess ?? 0,
       render: (r) =>
         r.excess === null ? (
@@ -106,18 +115,27 @@ export function Leaderboard() {
         ),
     },
     {
+      // Ranked by return, not by NAV — the screen says so and the strip above
+      // carries the member's own money. Everyone else's is one tap away in
+      // their book.
       key: "equity",
       header: "NAV",
       align: "right",
       width: "7.5rem",
+      hideOnMobile: true,
       sortValue: (r) => r.equity,
       render: (r) => <Value value={r.equity}>{money(r.equity)}</Value>,
     },
     {
+      // The season is what this screen ranks, and the day is a different
+      // question with its own screen. What survives on a phone is exactly the
+      // four columns that make the argument: who, the bar, the market drawn
+      // through it, and the number the bar is.
       key: "dayPnl",
       header: "Day",
       align: "right",
       width: "6.5rem",
+      hideOnMobile: true,
       sortValue: (r) => r.dayPnl,
       render: (r) => (
         <Value value={r.dayPnl} colorBySign flash>
@@ -129,6 +147,7 @@ export function Leaderboard() {
       key: "top",
       header: "Largest position",
       width: "11rem",
+      hideOnMobile: true,
       sortValue: (r) => r.top?.symbol ?? "",
       render: (r) =>
         r.top ? (
@@ -150,6 +169,7 @@ export function Leaderboard() {
       header: "Pos",
       align: "right",
       width: "3.5rem",
+      hideOnMobile: true,
       sortValue: (r) => r.positions,
       render: (r) => (
         <Value value={r.positions} dim>
@@ -207,7 +227,11 @@ export function Leaderboard() {
       value: <Benchmark value={qqq} />,
     },
     {
+      // The spread of the club is drawn as a whole axis of bars a screen
+      // below this. On a phone the two extremes of it are the restatement,
+      // and the bars are the thing worth the height.
       label: "Best / worst",
+      hideOnMobile: true,
       value:
         summary && summary.bestReturn !== null && summary.worstReturn !== null ? (
           <span className="num">
@@ -220,7 +244,10 @@ export function Leaderboard() {
         ),
     },
     {
+      // A total nobody trades against. It is the one cell here that answers
+      // no question a member came with.
       label: "Club assets",
+      hideOnMobile: true,
       value: <span className="num text-ink">{compact(summary?.totalEquity ?? 0)}</span>,
       sub: <span className="label label-ink">{summary?.members ?? 0} members</span>,
     },
@@ -243,13 +270,20 @@ export function Leaderboard() {
   }
 
   return (
-    <div className="flex h-full flex-col">
+    // The standings are one panel, so below `md` the height becomes a floor and
+    // the club scrolls as a page — thirty members at 36px is taller than a
+    // phone, and a grid scrolling inside a panel inside a page that does not is
+    // two scrollbars where one would do.
+    <div className="flex min-h-full flex-col md:h-full">
       <StatStrip stats={stats} />
 
       {standings?.season.tradingLocked && (
-        <div role="status" className="border-b border-accent-dim bg-accent-wash px-3 py-1.5">
-          <span className="label text-accent">Trading locked</span>
-          <span className="ml-2 text-ink-dim">
+        <div
+          role="status"
+          className="shrink-0 border-b border-accent-dim bg-accent-wash px-3 py-1.5 sm:flex sm:items-baseline sm:gap-2"
+        >
+          <span className="label block shrink-0 text-accent sm:inline">Trading locked</span>
+          <span className="block text-ink-dim">
             An officer has paused the season. Positions still move with the market; new orders are
             refused.
           </span>
@@ -259,7 +293,7 @@ export function Leaderboard() {
       {openMember ? (
         <MemberBook row={openMember} onClose={() => setOpenMember(null)} />
       ) : (
-        <div className="min-h-0 flex-1 p-2.5">
+        <div className="flex-1 p-2.5 md:min-h-0">
           <Panel
             title="Standings"
             meta={
@@ -275,8 +309,13 @@ export function Leaderboard() {
                         day: "numeric",
                       })}
                     </span>
-                    <span className="text-ink-faint">·</span>
-                    <span className="text-ink-faint">bar is return, hairline is SPY</span>
+                    <span className="hidden text-ink-faint sm:inline">·</span>
+                    {/* The legend for the bar. It is the first thing to go on
+                        a phone, where the header is a 40-character strip and
+                        the count and the timestamp are the facts. */}
+                    <span className="hidden text-ink-faint sm:inline">
+                      bar is return, hairline is SPY
+                    </span>
                     {standings?.asOf && (
                       <>
                         <span className="text-ink-faint">·</span>

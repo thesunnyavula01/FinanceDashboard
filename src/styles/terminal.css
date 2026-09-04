@@ -217,3 +217,126 @@
     transition-duration: 0.01ms !important;
   }
 }
+
+/* ============================================================================
+   Mobile
+   This terminal was drawn for a desktop and half a club reads it on a phone.
+   Nothing below changes what the app *is* — the density, the amber, the
+   tabular figures and the grid all survive. What changes is the four things
+   a 390px touch screen genuinely cannot do the desktop way: the viewport is
+   shorter than it claims, fingers are not cursors, iOS zooms a small input,
+   and eleven columns do not fit.
+   ========================================================================= */
+
+/*
+  `100%` on a phone resolves against the *large* viewport — the one that
+  assumes the browser's address bar has scrolled away. So a shell sized to it
+  puts the command bar a bar's height below the fold until you scroll, which on
+  a page that does not scroll is forever. `100dvh` is the viewport as it
+  actually is right now, and it re-measures as the chrome slides.
+*/
+@supports (height: 100dvh) {
+  html.h-full,
+  body.h-full,
+  #root.h-full {
+    height: 100dvh;
+  }
+}
+
+@layer base {
+  html {
+    /* Landscape rotation on iOS otherwise reflows the whole grid one size up. */
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+  }
+
+  body {
+    /* No rubber-band on the shell. Panels that scroll still scroll — this only
+       stops the whole terminal bouncing off its own edges, which on a fixed
+       app frame reads as a rendering fault rather than as a gesture. */
+    overscroll-behavior-y: none;
+  }
+
+  /*
+    iOS Safari zooms the page whenever a focused input's text is under 16px,
+    and it does not zoom back out. On an order ticket that is worse than it
+    sounds: the member taps a quantity field, the terminal jumps to 150%, and
+    the buying-power line they were about to read is off-screen. 16px in the
+    fields is the price of never zooming, and it is the one place this app
+    spends height on legibility rather than density.
+  */
+  @media (max-width: 767px) {
+    input,
+    select,
+    textarea {
+      font-size: 16px;
+    }
+  }
+
+  /* A 28px row is a comfortable line of data and a poor target for a thumb.
+     Under a coarse pointer the grid steps up to 36px — the same layout, one
+     size up, which is enough to hit a row without hitting its neighbour. */
+  @media (pointer: coarse) {
+    :root {
+      --spacing-row: 2.25rem; /* 36px */
+    }
+  }
+
+}
+
+@layer components {
+  /* Under a thumb a keycap has to be hittable as well as readable. */
+  @media (pointer: coarse) {
+    .keycap {
+      min-height: 1.75rem;
+      padding: 0 0.5rem;
+    }
+  }
+
+  /*
+    The insets. `env()` is 0 on every device without a notch, so these are
+    inert on a desktop and on most phones, and exact on the ones that need
+    them. Only the two rails that touch the frame carry them — a panel in the
+    middle of the page has nothing to clear.
+  */
+  .pad-safe-top {
+    padding-top: env(safe-area-inset-top, 0px);
+  }
+
+  .pad-safe-bottom {
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+
+  .pad-safe-x {
+    padding-left: env(safe-area-inset-left, 0px);
+    padding-right: env(safe-area-inset-right, 0px);
+  }
+
+  /*
+    A scroller with no visible bar. Used on the two rails that have to overflow
+    on a phone — the function-key nav and the expiration rail — where a
+    scrollbar under the row would eat a third of a 28px strip. Both carry their
+    own overflow affordance instead: the row is cut mid-item at the edge, which
+    is what tells a thumb there is more.
+  */
+  .rail-scroll {
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+  .rail-scroll::-webkit-scrollbar {
+    display: none;
+  }
+
+  /*
+    A grid that is wider than the phone scrolls sideways inside its panel
+    rather than pushing the page out — the one thing that must never happen,
+    because a body that scrolls horizontally takes the status rail and the
+    command bar with it. `contain` keeps the swipe inside the grid instead of
+    handing the overscroll to the page behind it.
+  */
+  .grid-scroll {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-x: contain;
+  }
+}

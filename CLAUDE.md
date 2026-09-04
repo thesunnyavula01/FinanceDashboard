@@ -1107,6 +1107,104 @@ animated line draws: the tick flash is still the only motion in the app.
 
 ---
 
+## The phone
+
+Half the club reads this on a phone, and the terminal was drawn for a desktop.
+The rule is that **the phone gets the same instrument showing less**, never a
+second app: the density, the amber, the tabular figures, the panels and the
+grid all survive, and what changes is the four things a 390px touch screen
+genuinely cannot do the desktop way.
+
+`md` (768px) is the line. Below it every screen is one column, the grids drop
+their secondary columns, and the option chain loses a field per side.
+`src/hooks/useMediaQuery.ts` holds that number once, so the CSS breakpoints and
+the JS ones cannot drift into a width that is neither layout.
+
+### A grid drops columns and then scrolls, in that order
+
+`Column.hideOnMobile` removes a column from the render below `md` — removes,
+not `display: none`, which still lays the column out and still renders every
+row's value. What is left scrolls sideways inside its panel if it has to.
+
+Both halves are needed. Scrolling alone leaves a member swiping past four
+columns of context to reach the P/L they opened the screen for. Dropping alone
+still overflows on a long ticker, and a page that scrolls horizontally takes
+the status rail and the command bar off the screen with it.
+
+**What gets marked is context, never the answer.** The name beside a ticker,
+the sector beside a name, the average cost beside a live price — all of those
+are restatements of something the row already carries or another screen asks
+properly. F3 keeps `#`, the member, the bar and the return, because the bar
+*is* the screen; F1 keeps the last price, the market value, the day and the
+P/L. Sorting still reads the full column list, so a grid ordered by a column
+the phone does not draw stays ordered by it.
+
+There is no `minWidth` on the table and none is wanted: an auto-layout table
+already refuses to render narrower than its own min-content, so the floor is
+computed per grid from the headers and figures actually in it.
+
+### The bug that is invisible on the machine it breaks on
+
+A bare Tailwind `grid` has one implicit `auto` track, and an `auto` track is at
+least its content's min-content width. So a panel holding an eleven-column
+table made its track 511px wide inside a 360px screen, and the whole page
+scrolled sideways under its own chrome. Every stacking layout grid therefore
+carries an unprefixed **`grid-cols-1`** — `repeat(1, minmax(0, 1fr))`, where
+the `0` is the entire point — and `Panel` carries **`min-w-0`** beside its
+`min-h-0`, for the same reason and against the same trap in the other axis.
+
+None of that is visible at 1440px, which is why `scripts/mobile-layout.test.ts`
+asserts it as text rather than leaving it to a reviewer's eye.
+
+### Four rules in `terminal.css`
+
+- **The shell is sized in `dvh`.** `height: 100%` on a phone resolves against
+  the *large* viewport — the one that assumes the address bar has already
+  scrolled away — so a shell sized to it puts the command bar a bar's height
+  below the fold, on a page that does not scroll.
+- **Form fields are 16px below 768px.** iOS Safari zooms whenever a focused
+  input's text is smaller than that, and it does not zoom back: tap a quantity
+  field, and the buying-power line you were about to read is off-screen. This
+  is the one place the app spends height on legibility rather than density.
+- **`--spacing-row` steps 28px → 36px under a coarse pointer.** One variable,
+  so every grid, keycap and nav tab in the app grows together. A 28px row is a
+  comfortable line of data and a poor target for a thumb.
+- **`env()` insets on the two rails that touch the frame.** Zero on every
+  device without a notch, exact on the ones that need them.
+
+### What each screen gives up
+
+- **The status rail** keeps the session dot and its label at every width, and
+  sheds the ET clock, the display name and the app name in that order. A member
+  about to be told "market closed" has to see it before they type, and that is
+  as true at 390px as at 1440.
+- **The function-key nav** drops the keycaps below `sm` and scrolls sideways. A
+  function key is a promise about a keyboard, and a phone has none — `F1`
+  printed on a tab there is decoration standing where the label should be.
+  `LEGAL` only floats right from `sm` up, because `ml-auto` in a scroller
+  either does nothing or strands the link past the last tab.
+- **The stat strip** becomes a two-column grid whose hairlines are a 1px gap
+  over a line-coloured ground, since borders on a wrapping row leave the seams
+  between rows unpainted and the ends of them doubled. NAV steps to 22px, and
+  the two cells that restate something else — long/short, the position count —
+  drop out.
+- **The order ticket** stacks the quote under the ticker, shares the side rail
+  equally between its four keys, and puts the review panel in one column. It
+  also **prints the reason a side is disabled**, which on a desktop is a
+  `title`: a greyed-out SHORT that explains itself is the whole argument for
+  disabling it rather than rejecting later, and on a touch screen a tooltip
+  never fires.
+- **The option chain** shows bid, ask and the strike. Open interest goes first
+  because it is the only figure there that is not a price; the last print goes
+  next because on the indicative feed it lags OPRA by fifteen minutes and is
+  the worst of the three. What survives answers "what does this cost".
+- **`Panel`'s header clips.** It is one grid row tall and its meta slot is free
+  text; F4's sector panel names its gross, its legend and SPY's day, which is
+  three lines of content in 28px of room. Unclipped it wraps *over* the grid
+  below it. Callers keep their meta on one line so that stays a truncation.
+
+---
+
 ## Layout
 
 ```
@@ -1140,6 +1238,7 @@ worker/orders/stops.test.ts     the eight stop directions, and the SQL ratchet
 worker/routes/                  auth, quotes, market, orders, portfolio, leaderboard, admin
 supabase/migrations/*.sql       schema, RLS policies, place_order() RPC
 scripts/check-client-env.ts     build-time guard on the two VITE_ values
+scripts/mobile-layout.test.ts   the phone rules that are invisible on a desktop
 src/lib/                        supabase client, API client, formatters, valuation
 src/lib/sectors.ts              positions -> gross sector exposure, client-side
 src/lib/symbols.ts              the classifier, mirrored for the browser
@@ -1149,6 +1248,7 @@ src/hooks/usePortfolio.ts       holdings + blotter + the place-order mutation
 src/hooks/useHistory.ts         the equity curve, 5-minute poll (60s on 1D), range in state
 src/hooks/useLeaderboard.ts     the standings, 30s poll, plus one member's book
 src/hooks/useAdmin.ts           the console's one read and every officer mutation
+src/hooks/useMediaQuery.ts      one breakpoint, for the grids that drop columns
 src/components/terminal/        Panel, DataGrid, StatStrip, OrderTicket, Blotter,
                                 WorkingOrders, SymbolSearch, SectorBars, ReturnBar,
                                 OptionChain, MemberBook, MemberRoster, Corrections,

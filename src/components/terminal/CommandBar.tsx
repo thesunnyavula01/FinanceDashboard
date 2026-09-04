@@ -200,37 +200,68 @@ export function CommandBar({ isAdmin = false }: { isAdmin?: boolean }) {
     });
   }
 
+  /*
+    On a phone the bar keeps the prompt, the field and the key, and gives up
+    everything that was only ever a hint. The CMD label is redundant beside an
+    amber caret; the "press / to focus" line is advice about a key that is not
+    there; and the placeholder becomes the shortest thing that still teaches
+    the grammar, because a 390px field truncates the long one halfway through
+    the example and teaches nothing.
+
+    The response moves to its own line rather than competing with the field for
+    what is left. A price readback truncated to "NVDA $17…" is worse than a bar
+    that is briefly two rows tall.
+  */
   return (
     <form
       onSubmit={run}
-      className="flex shrink-0 items-center gap-2 border-t border-line bg-panel px-3 py-1.5"
+      className="pad-safe-bottom pad-safe-x shrink-0 border-t border-line bg-panel px-3 py-1.5"
     >
-      <label htmlFor="command" className="label shrink-0">
-        CMD
-      </label>
+      <div className="flex items-center gap-2">
+        <label htmlFor="command" className="label hidden shrink-0 sm:block">
+          CMD
+        </label>
 
-      <span className="num shrink-0 text-accent" aria-hidden="true">
-        &gt;
-      </span>
+        <span className="num shrink-0 text-accent" aria-hidden="true">
+          &gt;
+        </span>
 
-      <input
-        id="command"
-        ref={inputRef}
-        value={entry}
-        onChange={(e) => {
-          setEntry(e.target.value);
-          if (response) setResponse(null);
-        }}
-        placeholder="Ticker, screen name, or an order like BUY 10 NVDA @ 170 — then GO"
-        autoComplete="off"
-        spellCheck={false}
-        className="num min-w-0 flex-1 bg-transparent text-ink uppercase placeholder:text-ink-faint placeholder:normal-case focus:outline-none"
-      />
+        <input
+          id="command"
+          ref={inputRef}
+          value={entry}
+          onChange={(e) => {
+            setEntry(e.target.value);
+            if (response) setResponse(null);
+          }}
+          placeholder={PLACEHOLDER}
+          autoComplete="off"
+          // The field is uppercase by CSS and uppercased on submit, so a
+          // phone keyboard that starts in caps is telling the truth about what
+          // it is typing rather than fighting the transform.
+          autoCapitalize="characters"
+          autoCorrect="off"
+          enterKeyHint="go"
+          spellCheck={false}
+          className="num min-w-0 flex-1 bg-transparent text-ink uppercase placeholder:truncate placeholder:text-ink-faint placeholder:normal-case focus:outline-none"
+        />
 
-      {response ? (
-        <span
+        <span className="label label-ink hidden shrink-0 lg:block">
+          Press <span className="text-accent-dim">/</span> to focus
+        </span>
+
+        <button
+          type="submit"
+          className="keycap shrink-0 cursor-pointer transition-colors hover:border-accent hover:bg-accent hover:text-black"
+        >
+          GO
+        </button>
+      </div>
+
+      {response && (
+        <p
           role="status"
-          className={`truncate text-[0.6875rem] ${
+          className={`mt-1 truncate text-[0.6875rem] ${
             response.tone === "error"
               ? "text-loss"
               : response.tone === "busy"
@@ -239,19 +270,17 @@ export function CommandBar({ isAdmin = false }: { isAdmin?: boolean }) {
           }`}
         >
           {response.text}
-        </span>
-      ) : (
-        <span className="label label-ink hidden shrink-0 sm:block">
-          Press <span className="text-accent-dim">/</span> to focus
-        </span>
+        </p>
       )}
-
-      <button
-        type="submit"
-        className="keycap shrink-0 cursor-pointer transition-colors hover:border-accent hover:bg-accent hover:text-black"
-      >
-        GO
-      </button>
     </form>
   );
 }
+
+/**
+ * Short enough to survive a 390px field, long enough to still be a lesson.
+ *
+ * The placeholder is the only documentation this bar has, so what it keeps is
+ * the shape of the grammar — a ticker, or a verb and an amount and a ticker.
+ * The limit price and the screen names are in HELP, which is one word away.
+ */
+const PLACEHOLDER = "Ticker, screen, or BUY 10 NVDA";

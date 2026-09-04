@@ -47,9 +47,12 @@ export function Blotter({
 
   const columns: Column<Trade>[] = [
     {
+      // The blotter is ordered by time and read newest-first, so on a phone
+      // the position in the list is most of what the stamp was saying.
       key: "executedAt",
       header: "Time ET",
       width: "7.5rem",
+      hideOnMobile: true,
       sortValue: (trade) => trade.executedAt,
       render: (trade) => <span className="num text-ink-dim">{stampET(trade.executedAt)}</span>,
     },
@@ -61,8 +64,11 @@ export function Blotter({
       // A contract is shown as a contract. The raw OCC symbol is what settles
       // the money and what the API takes, so it stays one hover away rather
       // than being lost.
+      // `whitespace-nowrap` for the same reason F1's grid carries it: the
+      // pretty contract form is the one value here with spaces in it, and in a
+      // narrow column it wraps out of a fixed-height row.
       render: (trade) => (
-        <span className="num text-ink" title={trade.symbol}>
+        <span className="num whitespace-nowrap text-ink" title={trade.symbol}>
           {formatContract(trade.symbol)}
         </span>
       ),
@@ -97,10 +103,12 @@ export function Blotter({
       ),
     },
     {
+      // Qty times price, on a row that already carries both.
       key: "notional",
       header: "Value",
       align: "right",
       width: "7rem",
+      hideOnMobile: true,
       sortValue: (trade) => Number(trade.notional),
       render: (trade) => <Value value={trade.notional}>{money(trade.notional)}</Value>,
     },

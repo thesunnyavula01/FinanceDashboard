@@ -105,10 +105,14 @@ export function Sectors() {
       render: (s) => <Value value={s.gross}>{money(s.gross)}</Value>,
     },
     {
+      // Gross is the exposure the screen is about; the net is the footnote
+      // that says which way it leans. On a phone the bar and the weight carry
+      // the shape and the two dollar columns are one too many.
       key: "net",
       header: "Net",
       align: "right",
       width: "6.5rem",
+      hideOnMobile: true,
       sortValue: (s) => s.net,
       // Deliberately not coloured by sign. A negative net means net *short*,
       // which is a direction, not a loss, and colouring it red would put it in
@@ -120,9 +124,14 @@ export function Sectors() {
       ),
     },
     {
+      // This grid already carries one bar, and it is the one the screen is
+      // named after. Two bars in five columns on a phone is a picture of
+      // nothing; the Day % figure beside it says the same thing in four
+      // characters.
       key: "dayBar",
       header: "Day vs SPY",
       width: "6.5rem",
+      hideOnMobile: true,
       sortValue: (s) => s.dayReturn,
       render: (s) => (
         <ReturnBar value={s.dayReturn} scale={dayScale} benchmark={spyDayPercent} isMe />
@@ -141,10 +150,13 @@ export function Sectors() {
       ),
     },
     {
+      // Lifetime P/L by sector, on the screen that asks where the money sits
+      // rather than how it has done. F1 is the P/L screen.
       key: "pnl",
       header: "P/L",
       align: "right",
       width: "6.5rem",
+      hideOnMobile: true,
       sortValue: (s) => s.pnl,
       render: (s) => (
         <Value value={s.pnl} colorBySign>
@@ -211,8 +223,8 @@ export function Sectors() {
         rows size to content, the flex item's own `min-height: auto` lets the
         page grow, and <main> scrolls. Same reasoning as Admin.tsx.
       */}
-      <div className="grid flex-1 gap-2.5 p-2.5 xl:min-h-0 xl:grid-rows-[minmax(15rem,1.15fr)_minmax(14rem,1fr)]">
-        <div className="grid min-h-0 gap-2.5 xl:grid-cols-[1fr_minmax(17rem,20rem)]">
+      <div className="grid grid-cols-1 flex-1 gap-2.5 p-2.5 xl:min-h-0 xl:grid-rows-[minmax(15rem,1.15fr)_minmax(14rem,1fr)]">
+        <div className="grid min-h-0 grid-cols-1 gap-2.5 xl:grid-cols-[1fr_minmax(17rem,20rem)]">
           <ExposureMap
             sectors={sectors}
             cash={totals.cash}
@@ -229,11 +241,11 @@ export function Sectors() {
           />
         </div>
 
-        <div className="grid min-h-0 gap-2.5 xl:grid-cols-[1fr_minmax(22rem,28rem)]">
+        <div className="grid min-h-0 grid-cols-1 gap-2.5 xl:grid-cols-[1fr_minmax(22rem,28rem)]">
           <Panel
             title="Sector exposure"
             meta={
-              <span className="flex flex-wrap items-center gap-2">
+              <span className="flex items-center gap-2 whitespace-nowrap">
                 {problem ? (
                   <span className="text-loss">{problem}</span>
                 ) : sectors.length > 0 ? (

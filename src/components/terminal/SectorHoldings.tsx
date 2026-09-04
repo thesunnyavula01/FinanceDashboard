@@ -113,10 +113,14 @@ export function SectorHoldings({
       },
     },
     {
+      // The drill-down is a rail, and on a phone it is a rail four columns
+      // wide. What it exists to add is the industry label, so that stays and
+      // the lifetime P/L — which F1 prints per position anyway — goes.
       key: "pnl",
       header: "P/L",
       align: "right",
       width: "6rem",
+      hideOnMobile: true,
       sortValue: (r) => r.pnl,
       render: (r) => (
         <Value value={r.pnl} colorBySign>
@@ -130,7 +134,7 @@ export function SectorHoldings({
     <Panel
       title={filtered ? `Holdings · ${sector.sector}` : "Holdings"}
       meta={
-        <span className="flex flex-wrap items-center gap-2">
+        <span className="flex items-center gap-2 whitespace-nowrap">
           {filtered ? (
             <>
               {/* Deliberately terse. The panel is a rail, its title already

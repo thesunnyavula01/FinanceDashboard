@@ -64,10 +64,23 @@ export function FunctionNav({ isAdmin = false }: { isAdmin?: boolean }) {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [navigate, screens]);
 
+  /*
+    On a phone the keycaps come off.
+
+    A function key is a promise about a keyboard, and a phone has none — F1
+    printed on a tab there is decoration standing where the label should be,
+    and five of them are most of a 390px row. So below `sm` the tab is its name
+    and nothing else, which is also what makes the six of them fit. Above it
+    the keys are real and the keycap is how a member learns that.
+
+    The row scrolls sideways rather than wrapping. Wrapping would give the nav
+    a second line on exactly the screens with the least height, and it would
+    move under a thumb as the active tab changed width.
+  */
   return (
     <nav
       aria-label="Screens"
-      className="flex shrink-0 items-stretch border-b border-line bg-canvas"
+      className="rail-scroll pad-safe-x flex shrink-0 items-stretch overflow-x-auto border-b border-line bg-canvas"
     >
       {screens.map((screen) => (
         <NavLink
@@ -75,7 +88,7 @@ export function FunctionNav({ isAdmin = false }: { isAdmin?: boolean }) {
           to={screen.path}
           end={screen.path === "/"}
           className={({ isActive }) =>
-            `row flex items-center gap-1.5 border-r border-line px-3 transition-colors ${
+            `row flex shrink-0 items-center gap-1.5 border-r border-line px-3 transition-colors ${
               isActive
                 ? "bg-accent-wash text-accent"
                 : "text-ink-dim hover:bg-panel-hi hover:text-ink"
@@ -84,8 +97,10 @@ export function FunctionNav({ isAdmin = false }: { isAdmin?: boolean }) {
         >
           {({ isActive }) => (
             <>
-              <span className={`keycap ${isActive ? "keycap-active" : ""}`}>{screen.key}</span>
-              <span className="label" style={{ color: "inherit" }}>
+              <span className={`keycap hidden sm:inline-flex ${isActive ? "keycap-active" : ""}`}>
+                {screen.key}
+              </span>
+              <span className="label whitespace-nowrap" style={{ color: "inherit" }}>
                 {screen.label}
               </span>
             </>
@@ -99,11 +114,17 @@ export function FunctionNav({ isAdmin = false }: { isAdmin?: boolean }) {
         never looking for it in a hurry. It rides the empty end of a row that
         already exists, so it costs no height — a keycap would have claimed it
         is somewhere you go, and this is somewhere you refer to.
+
+        `ml-auto` only once there is spare room to push it into. In a scroller
+        there is none by definition, and an auto margin there would either do
+        nothing or strand the link past the last tab, so on a phone it simply
+        follows the screens as the last item on the rail — still at the end,
+        still keyless, still plain dim text.
       */}
       <NavLink
         to="/legal"
         className={({ isActive }) =>
-          `row ml-auto flex items-center border-l border-line px-3 transition-colors ${
+          `row flex shrink-0 items-center border-line px-3 transition-colors sm:ml-auto sm:border-l ${
             isActive ? "text-accent" : "text-ink-faint hover:text-ink-dim"
           }`
         }

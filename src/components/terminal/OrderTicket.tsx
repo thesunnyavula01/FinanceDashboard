@@ -194,6 +194,20 @@ export function OrderTicket({
     return { ...byPosition, SHORT: reason, COVER: reason };
   }, [held, symbol, assetClass]);
 
+  // The distinct reasons behind the greyed-out keys. Deduplicated because the
+  // long-only rule disables SHORT and COVER with the same sentence, and
+  // printing it twice would read as two different rules.
+  const sideReasons = useMemo(
+    () => [
+      ...new Set(
+        ORDER_SIDES.map((candidate) => disabledSides[candidate]).filter(
+          (reason): reason is string => Boolean(reason),
+        ),
+      ),
+    ],
+    [disabledSides],
+  );
+
   // Crypto has no bell, so the exchange calendar has nothing to say about it.
   const marketOpen = alwaysOpen || Boolean(clock?.isOpen && clock.authoritative);
   const closing = side === "SELL" || side === "COVER";
@@ -492,8 +506,15 @@ export function OrderTicket({
       }
     >
       <form onSubmit={submit} className="flex flex-col gap-3">
-        {/* Ticker, with the quote beside it. */}
-        <div className="grid grid-cols-[1fr_auto] gap-3">
+        {/*
+          Ticker, with the quote beside it — and under it on a phone. Side by
+          side, the price box takes a fixed 9rem out of a 340px panel and the
+          symbol field is left with barely room for the twenty-one characters
+          of an OCC contract it is required to hold. Stacked, both are full
+          width and the quote sits directly under the ticker it belongs to,
+          which is the reading order anyway.
+        */}
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-[1fr_auto]">
           <div>
             {/*
               The instrument selector rides on the label row rather than taking
@@ -555,7 +576,7 @@ export function OrderTicket({
             />
           </div>
 
-          <div className="min-w-[9rem] border border-line bg-canvas px-2 py-1.5">
+          <div className="border border-line bg-canvas px-2 py-1.5 sm:min-w-[9rem]">
             <div className="label">{marketOpen ? "Last" : "Prev close"}</div>
             {price ? (
               <>
@@ -592,6 +613,16 @@ export function OrderTicket({
           <span className="label mb-1 block" id="order-side-label">
             Side
           </span>
+          {/*
+            Four keycaps at 4.5rem apiece plus their gaps is 18.5rem, and the
+            ticket panel on a 390px phone is about 20rem of usable width — so
+            they fit, but only just, and a slightly narrower phone would wrap
+            SHORT and COVER onto a second line with the first two stretched
+            across the first. Sharing the row equally instead keeps the four
+            sides one rank of equal keys at every width, which is what makes
+            "the disabled ones are the ones this instrument does not have"
+            readable at a glance.
+          */}
           <div
             role="radiogroup"
             aria-labelledby="order-side-label"
@@ -614,7 +645,7 @@ export function OrderTicket({
                     setSide(candidate);
                     reset();
                   }}
-                  className={`keycap min-w-[4.5rem] cursor-pointer transition-colors ${
+                  className={`keycap flex-1 cursor-pointer transition-colors sm:min-w-[4.5rem] sm:flex-none ${
                     selected ? "keycap-active" : "hover:border-accent hover:text-accent"
                   } disabled:cursor-not-allowed disabled:border-line disabled:bg-transparent disabled:text-ink-faint`}
                 >
@@ -623,6 +654,23 @@ export function OrderTicket({
               );
             })}
           </div>
+
+          {/*
+            The reason, in text, on a phone.
+
+            A disabled key with the reason on hover is the right answer on a
+            desktop and no answer at all on a touch screen, where there is no
+            hover and a `title` never fires. This ticket's whole argument is
+            that a greyed-out SHORT which explains itself teaches more than a
+            rejection does — so on a phone the explanation has to be on the
+            screen. It is one line under the rail, and only when something is
+            actually refused.
+          */}
+          {sideReasons.length > 0 && (
+            <p className="label label-ink mt-1 normal-case tracking-normal md:hidden">
+              {sideReasons.join(" ")}
+            </p>
+          )}
         </div>
 
         {/* Order type. Five of them now, so the rail wraps rather than squeezes. */}
@@ -667,9 +715,13 @@ export function OrderTicket({
 
         {/* The prices the chosen type implies. A stop-limit carries both. */}
         {(hasLimit(orderType) || isStop) && (
-          <div className="grid grid-cols-2 items-start gap-3">
+          // A stop-limit carries both prices. On a phone they stack: two
+          // money fields sharing a 340px row leaves each about eight
+          // characters wide, and "Pay at most" over a field holding 1,234.56
+          // is the pair a member has to read most carefully.
+          <div className="grid grid-cols-1 items-start gap-3 sm:grid-cols-2">
             {isStop && (
-              <div className={hasLimit(orderType) ? "" : "col-span-2"}>
+              <div className={hasLimit(orderType) ? "" : "sm:col-span-2"}>
                 <label htmlFor="order-stop" className="label mb-1 block">
                   {isTrailing
                     ? `Trail by ${trailMode === "USD" ? "dollars" : "percent"}`
@@ -737,7 +789,7 @@ export function OrderTicket({
             )}
 
             {hasLimit(orderType) && (
-              <div className={isStop ? "" : "col-span-2"}>
+              <div className={isStop ? "" : "sm:col-span-2"}>
                 <label htmlFor="order-limit" className="label mb-1 block">
                   {side === "BUY" || side === "COVER" ? "Pay at most" : "Take at least"}
                 </label>
@@ -903,11 +955,15 @@ export function OrderTicket({
 
         {/* What you already hold. */}
         {held && (
-          <div className="flex items-baseline gap-2 border-l-2 border-line-hi bg-panel-hi px-2 py-1.5">
+          // Wraps rather than truncating. Four fragments on one line is a
+          // desktop row; on a phone "Short 100 AAPL260116C00150000 at $5.25"
+          // is wider than the panel, and this is the line that tells a member
+          // whether they are about to add to a position or close one.
+          <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 border-l-2 border-line-hi bg-panel-hi px-2 py-1.5">
             <span className="label shrink-0">Position</span>
             <span className="num text-ink">
               {held.qty < 0 ? "Short " : ""}
-              {shares(Math.abs(held.qty))} {symbol}
+              {shares(Math.abs(held.qty))} {formatContract(symbol)}
             </span>
             <span className="text-ink-faint">at</span>
             <span className="num text-ink-dim">{money(held.avgCost)}</span>
@@ -1048,7 +1104,15 @@ export function OrderTicket({
         {reviewing && sized && (
           <div role="group" aria-label="Review your order" className="border border-accent-dim bg-panel-hi">
             <p className="label border-b border-line px-2.5 py-1.5 text-accent">Review your order</p>
-            <dl className="grid grid-cols-2 gap-x-3 gap-y-1 px-2.5 py-2">
+            {/*
+              One column on a phone. This panel is the second of the two
+              presses and the only thing standing between a member and a live
+              order, so every line of it has to be readable in full — a
+              two-column review at 340px puts "Order" over a truncated
+              "SELL 3 AAPL 16JA…" and the point of freezing the order was that
+              what is confirmed is what will happen.
+            */}
+            <dl className="grid grid-cols-1 gap-x-3 gap-y-1 px-2.5 py-2 sm:grid-cols-2">
               <ReviewRow label="Order">
                 {verb} {shares(sized.qty)} {formatContract(symbol)}
               </ReviewRow>
@@ -1117,12 +1181,22 @@ export function OrderTicket({
 }
 
 /** One labelled figure in the review panel. */
+/**
+ * One line of the review panel.
+ *
+ * A `<div>` grouping its own `<dt>`/`<dd>` rather than a fragment dropped into
+ * the parent grid — which is valid in a `<dl>` and is what lets the pair stay a
+ * label-then-figure line whether the grid around it is one column or two. As
+ * loose grid items they would separate the moment the grid narrowed, leaving a
+ * right-aligned number under a left-aligned label with the full width of the
+ * panel between them.
+ */
 function ReviewRow({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <>
-      <dt className="label self-center">{label}</dt>
-      <dd className="num text-right text-ink">{children}</dd>
-    </>
+    <div className="flex items-baseline justify-between gap-3">
+      <dt className="label shrink-0">{label}</dt>
+      <dd className="num truncate text-right text-ink">{children}</dd>
+    </div>
   );
 }
 

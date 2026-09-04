@@ -39,9 +39,12 @@ export function WorkingOrders({ marketOpen }: { marketOpen: boolean }) {
 
   const columns: Column<WorkingOrder>[] = [
     {
+      // When it was placed matters far less than what it is waiting for, which
+      // is the column this screen exists to show.
       key: "placedAt",
       header: "Placed ET",
       width: "7.5rem",
+      hideOnMobile: true,
       sortValue: (order) => order.placedAt,
       render: (order) => <span className="num text-ink-dim">{stampET(order.placedAt)}</span>,
     },
@@ -127,10 +130,14 @@ export function WorkingOrders({ marketOpen }: { marketOpen: boolean }) {
       },
     },
     {
+      // The strip at the top of both screens that show this panel already
+      // nets the reservation out of buying power, and the panel header prints
+      // the total. Per-order, on a phone, it is a third copy.
       key: "held",
       header: "Held",
       align: "right",
       width: "7rem",
+      hideOnMobile: true,
       sortValue: (order) => Number(order.reservedCash),
       render: (order) =>
         Number(order.reservedCash) > 0 ? (
@@ -142,9 +149,14 @@ export function WorkingOrders({ marketOpen }: { marketOpen: boolean }) {
         ),
     },
     {
+      // Chosen on the ticket, restated there before the second press, and
+      // reported in "Recently resolved" if a DAY order ever dies of it. On a
+      // phone the row keeps the four columns that say what the order *is* and
+      // the key that cancels it.
       key: "timeInForce",
       header: "Good for",
       width: "8rem",
+      hideOnMobile: true,
       sortValue: (order) => order.timeInForce,
       render: (order) => (
         <span className="text-ink-faint">

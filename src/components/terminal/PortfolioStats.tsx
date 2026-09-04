@@ -73,7 +73,11 @@ export function PortfolioStats({
         ) : undefined,
     },
     {
+      // Two figures in one cell, which is already the widest thing here, and
+      // F4 draws the same split as a bar a member can actually read. It is the
+      // first cell to go on a phone.
       label: "Long / Short",
+      hideOnMobile: true,
       value: (
         <span className="num">
           {money(totals.longMv)}
@@ -83,7 +87,10 @@ export function PortfolioStats({
       ),
     },
     {
+      // The positions panel header on F1 says "N holdings" a few pixels below
+      // this, so on a phone it is the same number twice.
       label: "Positions",
+      hideOnMobile: true,
       value: <span className="num">{positionCount}</span>,
     },
   ];
@@ -103,9 +110,16 @@ export function MarginWarning({ totals }: { totals: PortfolioTotals }) {
   if (totals.netBuyingPower >= 0) return null;
 
   return (
-    <div role="status" className="border-b border-loss bg-panel-hi px-3 py-1.5">
-      <span className="label text-loss">Margin call</span>
-      <span className="ml-2 text-ink-dim">
+    // The label and the sentence are a block on a phone rather than a run-on
+    // line: at 390px the inline version puts "Margin call" alone on the first
+    // line with the explanation flowing under it anyway, only without the
+    // spacing that would make it read as a heading.
+    <div
+      role="status"
+      className="shrink-0 border-b border-loss bg-panel-hi px-3 py-1.5 sm:flex sm:items-baseline sm:gap-2"
+    >
+      <span className="label block shrink-0 text-loss sm:inline">Margin call</span>
+      <span className="block text-ink-dim">
         Your shorts require {money(totals.marginHeld)} of margin against {money(totals.cash)} of
         cash. New buys and shorts are blocked until you close some of it — selling and covering
         still work.

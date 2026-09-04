@@ -99,7 +99,16 @@ export function Trade() {
   }
 
   return (
-    <div className="flex h-full flex-col">
+    /*
+      Two height regimes. At `lg` the ticket and the blotter are columns of one
+      viewport-high screen and nothing scrolls but their bodies. Below it they
+      stack, and a definite height would divide the viewport between a form
+      that is taller than a phone and two grids — giving the ticket a scrollbar
+      of its own inside a page that is already scrolling, which is the one
+      arrangement in which a member cannot reach the Place Order button. So the
+      height becomes a floor and <main> scrolls the whole column.
+    */
+    <div className="flex min-h-full flex-col lg:h-full">
       <PortfolioStats
         totals={totals}
         positionCount={positions.length}
@@ -107,7 +116,7 @@ export function Trade() {
       />
       <MarginWarning totals={totals} />
 
-      <div className="grid min-h-0 flex-1 gap-2.5 p-2.5 lg:grid-cols-[minmax(24rem,26rem)_1fr]">
+      <div className="grid grid-cols-1 flex-1 gap-2.5 p-2.5 lg:min-h-0 lg:grid-cols-[minmax(24rem,26rem)_1fr]">
         <OrderTicket
           positions={positions}
           totals={totals}
@@ -133,7 +142,7 @@ export function Trade() {
           untouched, because nothing about it needed changing.
         */}
         <div
-          className={`grid min-h-0 gap-2.5 ${
+          className={`grid grid-cols-1 gap-2.5 lg:min-h-0 ${
             view === "chain"
               ? "lg:grid-rows-[minmax(0,3fr)_minmax(0,1fr)]"
               : "lg:grid-rows-[1fr_auto]"
@@ -150,10 +159,19 @@ export function Trade() {
                 // contract is worth. The quotes are live and synthetic; the
                 // prints are real and fifteen minutes old. The curve names
                 // whether it was replayed or stored for the same reason.
+                // The phone gets the half of the sentence that changes a
+                // decision — the rest truncates into the panel edge anyway.
                 <span title="Alpaca indicative feed: quotes are real-time and Alpaca-derived, prints lag OPRA by 15 minutes.">
-                  Indicative · quotes live, prints 15m delayed
+                  <span className="hidden sm:inline">Indicative · quotes live, </span>
+                  prints 15m delayed
                 </span>
               }
+              // A ladder has no intrinsic height: its body is a `flex-1`
+              // scroller, so in the stacked layout — where the row is auto
+              // rather than 3fr of a viewport — the panel would draw its
+              // headers over nothing. This is roughly ten rungs and the spot
+              // rule, which is the least that reads as a chain.
+              className="min-h-[24rem] lg:min-h-0"
               flush
             >
               <OptionChain

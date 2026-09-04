@@ -57,6 +57,7 @@ export function MemberBook({
     {
       key: "sector",
       header: "Sector",
+      hideOnMobile: true,
       sortValue: (r) => r.sector,
       render: (r) => <span className="truncate text-ink-faint">{r.sector}</span>,
     },
@@ -73,6 +74,7 @@ export function MemberBook({
       header: "Last",
       align: "right",
       width: "6rem",
+      hideOnMobile: true,
       sortValue: (r) => r.last,
       render: (r) => (
         <Value value={r.last} flash>
@@ -105,6 +107,7 @@ export function MemberBook({
       header: "Wt",
       align: "right",
       width: "4.5rem",
+      hideOnMobile: true,
       sortValue: (r) => r.weight,
       render: (r) => (
         <Value value={r.weight} dim>
@@ -119,6 +122,7 @@ export function MemberBook({
       key: "executedAt",
       header: "Time",
       width: "7rem",
+      hideOnMobile: true,
       sortValue: (t) => t.executedAt,
       render: (t) => <span className="num text-ink-faint">{stampET(t.executedAt)}</span>,
     },
@@ -163,6 +167,7 @@ export function MemberBook({
       header: "Realized",
       align: "right",
       width: "6.5rem",
+      hideOnMobile: true,
       sortValue: (t) => Number(t.realizedPnl),
       render: (t) =>
         Number(t.realizedPnl) === 0 ? (
@@ -175,8 +180,14 @@ export function MemberBook({
     },
   ];
 
+  /*
+    Two panels, an even split of the viewport on a desktop. On a phone an even
+    split of a viewport this shallow is two four-row grids, so the rows go to
+    auto and the pair scrolls as a page — the positions first, because that is
+    what a member opened somebody else's book to see, and the fills under them.
+  */
   return (
-    <div className="grid min-h-0 flex-1 grid-rows-[1fr_1fr] gap-2.5 p-2.5">
+    <div className="grid grid-cols-1 flex-1 gap-2.5 p-2.5 md:min-h-0 md:grid-rows-[1fr_1fr]">
       <Panel
         title={`#${row.rank} ${row.displayName}`}
         meta={

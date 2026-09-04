@@ -99,6 +99,7 @@ export function Corrections({ portfolios }: { portfolios: { id: string; name: st
       key: "executedAt",
       header: "Time",
       width: "7rem",
+      hideOnMobile: true,
       sortValue: (t) => t.executedAt,
       render: (t) => <span className="num text-ink-faint">{stampET(t.executedAt)}</span>,
     },
@@ -160,6 +161,7 @@ export function Corrections({ portfolios }: { portfolios: { id: string; name: st
     {
       key: "notional",
       header: "Notional",
+      hideOnMobile: true,
       align: "right",
       width: "7.5rem",
       sortValue: (t) => Number(t.notional),
@@ -172,6 +174,7 @@ export function Corrections({ portfolios }: { portfolios: { id: string; name: st
     {
       key: "realizedPnl",
       header: "Realized",
+      hideOnMobile: true,
       align: "right",
       width: "6.5rem",
       sortValue: (t) => Number(t.realizedPnl),

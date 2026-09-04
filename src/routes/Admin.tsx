@@ -107,7 +107,7 @@ export function Admin() {
   // and <main> does the scrolling.
   return (
     <div className="flex min-h-full flex-col gap-2.5 p-2.5">
-      <div className="grid gap-2.5 lg:grid-cols-3">
+      <div className="grid grid-cols-1 gap-2.5 lg:grid-cols-3">
         <SeasonPanel season={activeSeason} />
         <InvitePanel invite={overview.invite} universe={overview.universe} />
         <LifecyclePanel season={activeSeason} members={overview.members.length} />

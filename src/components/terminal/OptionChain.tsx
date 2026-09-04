@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef } from "react";
 import type { ChainContract, ChainResponse } from "@/lib/api";
 import { compact, money } from "@/lib/format";
+import { useIsMobile } from "@/hooks/useMediaQuery";
 
 interface OptionChainProps {
   chain: ChainResponse | null;
@@ -56,6 +57,25 @@ export function OptionChain({
 }: OptionChainProps) {
   const scroller = useRef<HTMLDivElement>(null);
   const atTheMoney = useRef<HTMLDivElement>(null);
+  const isMobile = useIsMobile();
+
+  /*
+    Nine columns across a 390px phone is thirty pixels each, and `$12.35` is
+    not thirty pixels. So the phone ladder is bid, ask and the strike, and it
+    drops open interest and the last print — in that order, and for two
+    different reasons.
+
+    Open interest goes first because it is the only figure here that is not a
+    price: it says how crowded a strike is, which is context for choosing
+    between strikes rather than for buying one. The last print goes next
+    because on this feed it is the *worst* of the three prices — the quotes are
+    real-time and the prints lag OPRA by fifteen minutes, which is why the mark
+    prefers the midpoint in the first place. What survives is the two numbers
+    that answer "what does this cost", which is the question a ladder exists
+    to answer at a glance.
+  */
+  const callFields: Field[] = isMobile ? ["bid", "ask"] : ["oi", "last", "bid", "ask"];
+  const putFields: Field[] = isMobile ? ["bid", "ask"] : ["bid", "ask", "last", "oi"];
 
   const spot = chain?.underlyingPrice ?? null;
 
@@ -125,15 +145,15 @@ export function OptionChain({
       />
 
       {/* Two headers, one for each half, mirrored around the strike. */}
-      <div className="grid shrink-0 grid-cols-[1fr_4.5rem_1fr] border-b border-line">
+      <div className={`grid shrink-0 border-b border-line ${LADDER}`}>
         <div className="label px-2 py-1 text-center">Calls</div>
         <div className="label label-ink py-1 text-center">Strike</div>
         <div className="label px-2 py-1 text-center">Puts</div>
       </div>
-      <div className="grid shrink-0 grid-cols-[1fr_4.5rem_1fr] border-b border-line">
-        <Head columns={["OI", "Last", "Bid", "Ask"]} />
+      <div className={`grid shrink-0 border-b border-line ${LADDER}`}>
+        <Head fields={callFields} />
         <div />
-        <Head columns={["Bid", "Ask", "Last", "OI"]} />
+        <Head fields={putFields} />
       </div>
 
       <div ref={scroller} className="min-h-0 flex-1 overflow-y-auto">
@@ -149,11 +169,11 @@ export function OptionChain({
               {index === pivot && spot !== null && <SpotRule price={spot} chain={chain} />}
               <div
                 ref={index === pivot ? atTheMoney : undefined}
-                className="row grid grid-cols-[1fr_4.5rem_1fr] items-center border-b border-line/60 hover:bg-panel-hi"
+                className={`row grid items-center border-b border-line/60 hover:bg-panel-hi ${LADDER}`}
               >
                 <Side
                   contract={rung.call}
-                  order={["oi", "last", "bid", "ask"]}
+                  order={callFields}
                   itm={callItm}
                   selected={selected === rung.call?.symbol}
                   onSelect={onSelect}
@@ -161,7 +181,7 @@ export function OptionChain({
                 <div className="num text-center font-medium text-accent">{money(rung.strike)}</div>
                 <Side
                   contract={rung.put}
-                  order={["bid", "ask", "last", "oi"]}
+                  order={putFields}
                   itm={putItm}
                   selected={selected === rung.put?.symbol}
                   onSelect={onSelect}
@@ -196,7 +216,7 @@ function ExpiryRail({
     <div
       role="tablist"
       aria-label="Expiration"
-      className="flex shrink-0 items-center gap-3 overflow-x-auto border-b border-line px-2.5 py-1.5"
+      className="rail-scroll flex shrink-0 items-center gap-3 overflow-x-auto border-b border-line px-2.5 py-1.5"
     >
       {expirations.map((date) => {
         const selected = date === active;
@@ -244,12 +264,33 @@ function SpotRule({ price, chain }: { price: number; chain: ChainResponse }) {
 
 type Field = "oi" | "last" | "bid" | "ask";
 
-function Head({ columns }: { columns: string[] }) {
+const FIELD_LABEL: Record<Field, string> = {
+  oi: "OI",
+  last: "Last",
+  bid: "Bid",
+  ask: "Ask",
+};
+
+/**
+ * The three columns the ladder is built from: a half, the axis, a half.
+ *
+ * Both header rows and every rung use it, so the strike column cannot drift
+ * out of alignment with its own label — which on a mirrored layout is the one
+ * misalignment that makes the whole thing unreadable. The axis narrows on a
+ * phone because a strike is four or five characters and 4.5rem of centred
+ * space around it is width the two price halves need more.
+ */
+const LADDER = "grid-cols-[1fr_3.5rem_1fr] sm:grid-cols-[1fr_4.5rem_1fr]";
+
+function Head({ fields }: { fields: Field[] }) {
   return (
-    <div className="grid grid-cols-4 px-2">
-      {columns.map((column) => (
-        <span key={column} className="label py-1 text-right">
-          {column}
+    <div
+      className="grid px-2"
+      style={{ gridTemplateColumns: `repeat(${fields.length}, minmax(0, 1fr))` }}
+    >
+      {fields.map((field) => (
+        <span key={field} className="label py-1 text-right">
+          {FIELD_LABEL[field]}
         </span>
       ))}
     </div>
@@ -298,7 +339,8 @@ function Side({
       aria-label={`${contract.type} ${money(contract.strike)}, ${
         contract.mark === null ? "no price" : `mark ${money(contract.mark)}`
       }`}
-      className={`grid h-full w-full grid-cols-4 items-center px-2 text-left transition-colors ${
+      style={{ gridTemplateColumns: `repeat(${order.length}, minmax(0, 1fr))` }}
+      className={`grid h-full w-full items-center px-2 text-left transition-colors ${
         itm ? "bg-panel-hi" : ""
       } ${selected ? "shadow-[inset_2px_0_0_0_var(--color-accent)]" : ""} hover:bg-accent-wash`}
     >

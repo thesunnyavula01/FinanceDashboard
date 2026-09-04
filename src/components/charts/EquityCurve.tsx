@@ -60,7 +60,16 @@ export function EquityCurve({
   const last = points.at(-1);
 
   return (
-    <Panel title="Performance" meta={<Headline history={history} />} className="min-h-[16rem]">
+    /*
+      The floor, not a preference. A plot has no intrinsic height — Recharts
+      measures its container — so in an auto-height row, which is what F1
+      becomes below `md`, the panel would size to its own chrome and the chart
+      would resolve to nothing. 19rem is the same height the desktop grid row
+      already guarantees, so this changes only the stacked case, and it is
+      what the toggles, the legend, the excess strip and the caption need
+      before there is a line left to draw.
+    */
+    <Panel title="Performance" meta={<Headline history={history} />} className="min-h-[19rem]">
       <div className="flex h-full min-h-0 flex-col gap-1.5">
         <div className="flex shrink-0 flex-wrap items-center justify-between gap-2">
           <RangeToggle range={range} onChange={onRangeChange} />
@@ -109,7 +118,7 @@ function Headline({ history }: { history: HistoryResponse | null }) {
   const { value, change, summary, baseDate, intraday } = history;
 
   return (
-    <span className="flex flex-wrap items-center gap-2">
+    <span className="flex items-center gap-2 whitespace-nowrap">
       {value !== null && <span className="num text-ink">{money(value)}</span>}
       {change !== null && (
         <span className={`num ${signColor(change)}`}>

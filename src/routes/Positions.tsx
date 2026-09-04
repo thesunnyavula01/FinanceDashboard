@@ -52,8 +52,13 @@ export function Positions() {
             A contract is shown as a contract — "AAPL 16JAN26 150C" rather than
             AAPL260116C00150000. The stored symbol is what settles the money and
             what the API takes, so it stays one hover away rather than lost.
+
+            `whitespace-nowrap` because that pretty form is the one value in
+            this grid with spaces in it: in a narrow column it wraps to three
+            lines inside a fixed-height row, and all a member sees is "AAPL"
+            with the strike and the expiry clipped off below the border.
           */}
-          <span className="num font-medium text-ink" title={r.symbol}>
+          <span className="num font-medium whitespace-nowrap text-ink" title={r.symbol}>
             {formatContract(r.symbol)}
           </span>
           {r.isShort && (
@@ -70,15 +75,21 @@ export function Positions() {
       ),
     },
     {
+      // The two context columns. A member reading their own book on a phone
+      // knows what NVDA is and what sector it is in; what they came for is the
+      // last price and the P/L. F4 is where the sector question gets asked
+      // properly anyway, on a screen built for it.
       key: "name",
       header: "Name",
       width: "18rem",
+      hideOnMobile: true,
       sortValue: (r) => r.name,
       render: (r) => <span className="truncate text-ink-dim">{r.name}</span>,
     },
     {
       key: "sector",
       header: "Sector",
+      hideOnMobile: true,
       sortValue: (r) => r.sector,
       render: (r) => <span className="truncate text-ink-faint">{r.sector}</span>,
     },
@@ -91,10 +102,13 @@ export function Positions() {
       render: (r) => <Value value={r.qty}>{shares(r.qty)}</Value>,
     },
     {
+      // What it cost is already in the P/L, which is the answer the cost basis
+      // was being used to work out.
       key: "avgCost",
       header: "Avg cost",
       align: "right",
       width: "6rem",
+      hideOnMobile: true,
       sortValue: (r) => r.avgCost,
       render: (r) => (
         <Value value={r.avgCost} dim>
@@ -147,10 +161,14 @@ export function Positions() {
       ),
     },
     {
+      // The dollar P/L stays and the percentage goes, not the other way round.
+      // The dollars are what a member owns; the percentage is the comparison,
+      // and the leaderboard is a whole screen of that.
       key: "pnlPercent",
       header: "P/L %",
       align: "right",
       width: "5.5rem",
+      hideOnMobile: true,
       sortValue: (r) => r.pnlPercent,
       render: (r) => (
         <Value value={r.pnlPercent} colorBySign>
@@ -163,6 +181,7 @@ export function Positions() {
       header: "Wt",
       align: "right",
       width: "4.5rem",
+      hideOnMobile: true,
       sortValue: (r) => r.weight,
       render: (r) => (
         <Value value={r.weight} dim>
@@ -189,17 +208,32 @@ export function Positions() {
   }
 
   return (
-    <div className="flex h-full flex-col">
+    /*
+      Two height regimes, the same split Sectors.tsx and Admin.tsx draw.
+
+      At `md` and up the screen is the viewport: a definite height, divided
+      between the curve and the grid, and nothing scrolls but the grid's own
+      body. Below it that arithmetic stops working — 19rem of chart plus 14rem
+      of grid plus the stat strip is already taller than a phone in portrait,
+      so a definite height would give the grid four visible rows and clip the
+      fifth under the command bar. The height becomes a floor instead, the two
+      panels take what they need, and <main> — already `min-h-0 flex-1
+      overflow-auto` — does the scrolling.
+    */
+    <div className="flex min-h-full flex-col md:h-full">
       <PortfolioStats totals={totals} positionCount={rows.length} />
       <MarginWarning totals={totals} />
 
       {/*
-        Curve on top, grid underneath, in a fixed ratio at every width. The two
-        answer the halves of one question — how the season has gone, and what is
-        carrying it right now — and a member checking either usually wants a
-        glance at the other, which is what a tab here would cost them.
+        Curve on top, grid underneath. The two answer the halves of one
+        question — how the season has gone, and what is carrying it right now —
+        and a member checking either usually wants a glance at the other, which
+        is what a tab here would cost them. That holds on a phone too, so they
+        stay stacked in the same order rather than becoming tabs; what changes
+        is only that the curve takes a fixed 16rem and the grid takes its rows,
+        instead of the two dividing a viewport neither of them fits in.
       */}
-      <div className="grid min-h-0 flex-1 grid-rows-[minmax(19rem,1fr)_minmax(14rem,1fr)] gap-2.5 p-2.5">
+      <div className="grid grid-cols-1 flex-1 gap-2.5 p-2.5 md:min-h-0 md:grid-rows-[minmax(19rem,1fr)_minmax(14rem,1fr)]">
         <EquityCurve
           history={history}
           range={range}

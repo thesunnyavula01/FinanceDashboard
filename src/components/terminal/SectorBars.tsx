@@ -67,9 +67,15 @@ export function ConcentrationWarning({ sectors }: { sectors: SectorExposure[] })
   const [worst, second] = sectors;
 
   return (
-    <div role="status" className="border-b border-accent-dim bg-accent-wash px-3 py-1.5">
-      <span className="label text-accent">Concentrated</span>
-      <span className="ml-2 text-ink-dim">
+    // Same shape as the margin and trading-locked banners: an inline label and
+    // a sentence on a desktop, a heading over a paragraph on a phone, where the
+    // sentence was always going to wrap under the label anyway.
+    <div
+      role="status"
+      className="shrink-0 border-b border-accent-dim bg-accent-wash px-3 py-1.5 sm:flex sm:items-baseline sm:gap-2"
+    >
+      <span className="label block shrink-0 text-accent sm:inline">Concentrated</span>
+      <span className="block text-ink-dim">
         {formatWeight(worst!.weight)} of your exposure — {money(worst!.gross)} — is in{" "}
         {worst!.sector}
         {second && `, and another ${formatWeight(second.weight)} is in ${second.sector}`}. One

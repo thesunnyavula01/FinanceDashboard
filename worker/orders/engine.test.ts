@@ -234,7 +234,7 @@ test("a buy that exactly spends buying power is allowed", () => {
 });
 
 test("shorting consumes half the notional in buying power", () => {
-  // The claim in CLAUDE.md: shorting $X credits $X and locks 1.5X, so it costs
+  // The claim in DIRECTIONS.MD: shorting $X credits $X and locks 1.5X, so it costs
   // 0.5X of buying power. $10,000 of cash therefore supports a $20,000 short.
   const twenty = fill(applyFill(null, "TSLA", "SHORT", 100, 200));
   assert.equal(buyingPowerAfter([], 10_000, twenty, {}).rejection, null);

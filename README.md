@@ -55,13 +55,13 @@ and putting them in the wrong one is the most common way this breaks.
 |---|---|
 | [`SETUP.md`](./SETUP.md) | One-time account and API key checklist |
 | [`DEPLOYMENT.md`](./DEPLOYMENT.md) | Connecting the repo to Cloudflare |
-| [`CLAUDE.md`](./CLAUDE.md) | Architecture, invariants, design system |
+| [`PLANNING/DIRECTIONS.MD`](./PLANNING/DIRECTIONS.MD) | Architecture, invariants, design system |
 | [`docs/PLAN.md`](./docs/PLAN.md) | Full build plan, phase by phase |
 | [`docs/SITEMAP.md`](./docs/SITEMAP.md) | Every screen and route, and the ways in |
 
 ## Status
 
-**Complete.** Every phase of the build plan is done and on `main`:
+**Phases 0–9 complete** and on `main`. Phase 10 is planned and scaffolded, not built:
 
 | Phase | What it added |
 |---|---|
@@ -74,10 +74,16 @@ and putting them in the wrong one is the most common way this breaks.
 | 7 | Nightly portfolio and benchmark snapshots on a cron |
 | 8 | Crypto and long options — the symbol classifier, the chain, expiry |
 | 9 | Stop, stop-limit and trailing-stop orders, and a review-then-place ticket |
+| 10 | **Planned** — Research on F4: news, filings and discussion for any ticker |
 
 Both migrations past the initial schema — `0006_derivatives.sql` and
 `0007_stop_orders.sql` — are applied and verified against `pg_proc`. The test
-suite is 281 tests over the Worker and the build guards, and it passes.
+suite is 286 tests over the Worker and the build guards, and it passes.
+
+Phase 10 adds one credential and no migration. Its plan, the seven sources it
+reads and the two things to `curl` before writing any of it are in
+[`docs/PLAN.md`](./docs/PLAN.md); the key itself is step 7 of
+[`SETUP.md`](./SETUP.md).
 
 What is left is operational rather than unbuilt: set the runtime secrets and
 `npm run deploy`, then walk the checklist at the end of

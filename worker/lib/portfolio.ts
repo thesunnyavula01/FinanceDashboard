@@ -46,7 +46,7 @@ export interface MemberPortfolio {
  * parameter property. That is not a style preference: `node --test` loads these
  * modules by stripping types, which cannot synthesise the assignment a
  * parameter property implies, so one anywhere in the import graph makes every
- * test that reaches it fail to load. See CLAUDE.md on the no-build-step rule.
+ * test that reaches it fail to load. See DIRECTIONS.MD on the no-build-step rule.
  */
 export class PortfolioError extends Error {
   readonly code: "NO_SEASON" | "NO_PORTFOLIO";

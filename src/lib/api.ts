@@ -386,7 +386,7 @@ export function stopFiresOnRise(side: OrderSide): boolean {
 
 /**
  * What the member is asking for. There is no execution-price field, and that is
- * the point: the Worker fetches the price itself. See rule 3 in CLAUDE.md — a
+ * the point: the Worker fetches the price itself. See rule 3 in DIRECTIONS.MD — a
  * client that posts a price gets it ignored, so this one does not bother.
  *
  * `limitPrice` is not an exception. It is a *condition*, not an execution price:

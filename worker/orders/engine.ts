@@ -24,7 +24,7 @@ import { allowsShort, multiplierFor, tradesAroundTheClock } from "../market/symb
  * the member sees its message. `engine.test.ts` reads the SQL and asserts they
  * still agree on the constants.
  *
- * Note on rule 5 in CLAUDE.md — money is numeric, never float. Nothing computed
+ * Note on rule 5 in DIRECTIONS.MD — money is numeric, never float. Nothing computed
  * here is ever written to the database; these are preview figures and a
  * pre-flight opinion. The one place a total accumulates is `marketValues()`,
  * over a member's few dozen positions, and its result is used to decide a
@@ -303,7 +303,7 @@ export interface Valuation {
   shortMv: number;
   equity: number;
   marginHeld: number;
-  /** Clamped at zero, matching the formula in CLAUDE.md. */
+  /** Clamped at zero, matching the formula in DIRECTIONS.MD. */
   buyingPower: number;
   /** Unclamped, so a caller can tell "exactly nothing left" from "underwater". */
   netBuyingPower: number;

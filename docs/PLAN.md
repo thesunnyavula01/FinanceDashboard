@@ -70,6 +70,37 @@ Finnhub alone could not do this: it has no batch quote endpoint, so 200 symbols 
 Both providers sit behind a `MarketDataProvider` interface in `worker/market/provider.ts` so swapping
 to a paid feed later is a one-file change.
 
+### News providers (Phase 10), and the doors that closed in 2026
+
+Research needs *coverage*, which is the opposite requirement to prices: breadth of publisher rather
+than freshness of tick. The 2026 survey is mostly a list of options that stopped being free.
+**X/Twitter** ended its free tier in February 2026 — reads are now roughly half a cent per post with
+no free search, and the legacy Basic plan was retired outright in June. **CoinDesk Data
+(CryptoCompare)** retired free access in May 2026. **CoinGecko's** news endpoint is Analyst-plan-only.
+**Marketaux** allows 100 requests/day and returns three articles per response. **Polygon.io** free is
+5 requests/minute. None of those is buyable at club scale.
+
+What survived is broader than what was lost, and only one of the seven needs a signup:
+
+| Source | Credential | Ceiling | Brings |
+|---|---|---|---|
+| Alpaca `v1beta1/news` | **the existing Alpaca key** | 200/min | Benzinga wire, stocks **and** crypto, batched by symbol, back to 2015 |
+| Finnhub `company-news`, `news?category=crypto` | **the existing Finnhub key** | 60/min | a different mix: Reuters, CNBC, MarketWatch, Yahoo, Seeking Alpha |
+| Finnhub `stock/earnings` | same key | 60/min | actual-vs-estimate (**probe first**, see Phase 10) |
+| **GDELT DOC 2.0** | **none, ever** | courtesy | 100,000+ outlets worldwide — TechCrunch, The Verge, Ars Technica, trade and local press |
+| **SEC EDGAR** (`efts` + `data.sec.gov`) | **none, ever** | 10/sec | the primary documents: 8-K, 10-Q, 10-K, XBRL actuals |
+| **Hacker News** (Algolia) | **none, ever** | courtesy | tech-community discussion |
+| Reddit Data API | **the one signup** | 100/min per client | retail discussion — the slot X can no longer fill |
+
+EDGAR's condition is a `User-Agent` naming a reachable contact, or it answers 403 rather than
+throttling. That is `SEC_CONTACT`, a var rather than a secret because being contactable is the point.
+
+**Rate-limit math, again.** Six upstreams behind one `/api/research` call, cached 5–15 minutes at the
+edge, means a hundred members reading TSLA cost **one round of six calls, not six hundred** — the same
+sum the quote cache does at 20 seconds. The binding constraint is Finnhub's 60/min, shared with the
+sector enrichment `securities.ts` already budgets against: ~30 distinct tickers viewed in a 5-minute
+window is ~6 Finnhub calls/min. Alpaca's 200/min and EDGAR's 10/sec are never approached.
+
 ---
 
 ## Stack
@@ -158,7 +189,7 @@ Sides: `BUY`, `SELL`, `SHORT`, `COVER`. Order entry accepts either a share count
 
 ### Phase 0 — Foundation & credentials
 - `git init`, `.gitignore` (must cover `.env`, `.dev.vars`, `.wrangler/`).
-- **`CLAUDE.md`** — stack, provider split and the rate-limit reasoning, signed-qty convention, margin
+- **`PLANNING/DIRECTIONS.MD`** — stack, provider split and the rate-limit reasoning, signed-qty convention, margin
   formulas, the "secrets never reach the client" rule, commands, file layout.
 - **`.env.example`** (committed) and **`.env` / `.dev.vars`** (ignored):
   ```
@@ -284,16 +315,127 @@ premium rather than the contract cost, so `$300 of a $5.25 option` was 57 contra
 `0006_derivatives.sql` is written and **not yet applied**. Until it is, `/api/portfolio` answers 500
 and F1, F2 and F3 are dark — the same deliberate hard cutover as 0005.
 
+*(Applied and verified 2026-09-02.)*
+
+---
+
+### Phase 9 — The order ticket a real brokerage has
+
+`STOP`, `STOP_LIMIT` and `TRAILING_STOP` beside `MARKET` and `LIMIT`, a Review-then-Place
+confirmation step, and the crypto minimum-order-size floor surfaced before the press rather than at
+the fill.
+
+**Built.** Adds `0007_stop_orders.sql`, applied and verified 2026-09-02.
+
+Load-bearing decisions:
+
+- **One sentence defines three order types.** *A limit buys cheaper than the market and sells dearer;
+  a stop buys dearer and sells cheaper.* So a stop is a limit mirrored, and `stopFiresOnRise()` is
+  the single definition. Getting it backwards yields an order that looks entirely reasonable and
+  fires at exactly the wrong moment — a stop-loss selling into a rally — so `stops.test.ts`
+  enumerates all eight side-by-direction combinations rather than sampling them.
+- **Every stop is queued, never filled on the way in.** Its trigger is on the far side of the market
+  by construction, so the ticket reads QUEUE the moment a stop type is picked, which is the honest
+  label.
+- **A stop is entered in shares.** There is no price to convert a dollar amount at until the trigger
+  fires, and the conversion runs the wrong way: the cheaper the fill, the more shares a fixed dollar
+  amount turns out to buy.
+- **Reservations follow the trigger, not the last price.** A BUY stop sits above the market, so
+  reserving against the last price understates the cost by the whole distance to it — the member
+  queues an order they cannot pay for and finds out on the day it finally fires.
+- **Trailing stops ratchet inside one locked statement.** `trail_pending_order()` says
+  "greatest"/"least" in SQL rather than doing an UPDATE from the Worker, which is what stops a
+  concurrent sweep walking the stop backwards and firing it early. The sweep trails *before* it tests
+  the trigger, or it would evaluate today's price against yesterday's stop and fire one tick late.
+- **Firing is recorded, not re-derived.** `triggered_at` is stamped once, or a STOP_LIMIT would
+  un-fire when the price crossed back over its trigger and fill on whichever tick the sweep landed on.
+- **Review, then Place.** This reversed Phase 4's decision that the readback *was* the confirmation.
+  That held while the ticket had two order types and one price field; with five types, a stop price,
+  a trail and a limit it no longer did, and the readback label was still changing under the cursor at
+  the moment of the press. Any edit clears the review, so the panel can never describe an order other
+  than the one that will be placed.
+
+---
+
+### Phase 10 — Research on F4
+
+**Planned, not built.** One screen answering a question about the *asset* rather than the portfolio:
+type a ticker, get coverage from across the web — financial wire, tech and general press, the
+company's own SEC filings, and what retail is saying. Split by asset class the way everything else
+here is, and at the same density.
+
+Adds **no migration**. Nothing is persisted: news is ephemeral and lives in the edge cache, and
+earnings and filings are hours-long entries. Like Phase 7, there is no `0008_*.sql` to go looking
+for.
+
+The provider table is under "News providers" above. The short version: **one signup (Reddit)**, two
+existing keys reused, three sources that need no credential at all.
+
+Load-bearing decisions, each of which had a cheaper alternative that was rejected:
+
+- **Research takes F4; Sectors moves to F5 and Admin to F6.** The brief asked for F4 for members and
+  F5 for officers, which would make a printed keycap mean two different screens depending on who is
+  reading it — and `SCREENS` keys are static literals matched against `event.key`, so it would also
+  make the command bar's `s.key === command` lookup answer differently per audience. A key means one
+  screen for everyone; officers simply have one more. Legal stays keyless and is now deliberately not
+  F7, which is the same argument moved up one place.
+- **One endpoint, not six.** `/api/research?symbol=` fans out and merges, the way
+  `/api/market/chain` assembles expirations and a priced chain from several upstream calls. Six
+  client-side poll loops per member would multiply the club by six against the tightest ceiling in
+  the stack.
+- **Partial failure is reported, never fatal.** `Promise.allSettled` across every source, and the
+  payload carries `sources` and `missing` so the panel can say *why* a feed is thin.
+  `describeMarketError` runs only when every source failed. With six upstreams this matters far more
+  than it did with two: the screen must not go dark because GDELT rate-limited us.
+- **The wire/web split is labelled, not blended.** Alpaca and Finnhub search by ticker; GDELT and
+  Hacker News search by *keyword*, so they need the company's name — which is why the asset card's
+  `useSecurities` lookup is load-bearing rather than decorative, and why `ALL · WIRE · WEB` is on
+  screen. Keyword search finds Apple the fruit and Gap the retailer, and a ticker-exact result must
+  never look identical to a name-matched one. Same habit as the curve naming whether it was replayed
+  or stored.
+- **Summaries render as text, never HTML.** There is no sanitizer in this repo and no
+  `dangerouslySetInnerHTML` anywhere; a news summary would be the first untrusted markup in the app.
+  Tags are stripped in the Worker and the client receives a plain string.
+- **Paywalls are marked, not filtered.** No API reports them, so a small domain set earns a dim
+  marker and loses ties on sort. A WSJ headline is still information; hiding it would be the app
+  deciding what a member may know.
+- **Crypto drops the earnings/filings panel** and lets headlines take the space — the same "same
+  instrument showing less" rule the phone layout already follows, applied to asset class. A coin has
+  no 10-Q, and a panel reading an em-dash four times is worse than no panel.
+- **The cache mirrors `chain.ts`, not `quotes.ts`.** Two tiers, a `.invalid` synthetic key, the
+  `typeof caches === "undefined"` guard that keeps the module loadable under `node --test`, and a
+  `forgetResearch()` export. There is no per-symbol batching to do here, so the class-based
+  three-tier cache would be machinery without a job.
+
+Two things to establish by `curl` before writing any panel — the habit that made Phase 8 worth
+reading:
+
+- **Is Finnhub `/stock/earnings` still free on this key?** They paywalled `/stock/candle` and
+  `worker/market/finnhub.ts` carries a comment saying so; the documentation does not settle earnings
+  either way. If it 403s, the numbers come from SEC XBRL company-facts instead — free, authoritative,
+  already in the lineup, and no credential changes.
+- **Does GDELT answer from a Worker?** It rate-limits by IP and refused a shared cloud egress during
+  research. From Cloudflare's edge with a declared `User-Agent` it should be fine, but it is
+  unverified. If it proves unreliable, Hacker News and the two wire sources still fill the panel —
+  which is the partial-failure design doing exactly its job.
+
 ---
 
 ## Critical files
 
 ```
-CLAUDE.md
+PLANNING/DIRECTIONS.MD
 .env.example / .dev.vars
 wrangler.jsonc
 supabase/migrations/*.sql          -- schema, RLS, place_order() RPC
 worker/index.ts                    -- Hono app + SPA fallback + scheduled handler
+worker/market/research.ts          -- Phase 10: fan-out, merge, dedupe, two-tier cache
+worker/market/gdelt.ts             -- Phase 10: global press, no credential
+worker/market/edgar.ts             -- Phase 10: SEC filings + XBRL, no credential
+worker/market/hackernews.ts        -- Phase 10: tech discussion, no credential
+worker/market/reddit.ts            -- Phase 10: retail discussion, the one new credential
+worker/routes/research.ts          -- Phase 10: GET /api/research?symbol=
+src/routes/Research.tsx            -- Phase 10: F4
 worker/market/provider.ts          -- swappable data-provider interface
 worker/market/alpaca.ts            -- snapshots, bars, clock, assets
 worker/market/finnhub.ts           -- profile2 → sector
@@ -339,6 +481,29 @@ src/routes/{Login,Dashboard,Trade,Leaderboard,Sectors,Admin}.tsx
     `EXPIRE` row at intrinsic and the position gone. Then void an unrelated trade in that portfolio
     and confirm `rebuild_portfolio()` reproduces the same cash — this is the check that catches the
     multiplier being missed in the replay.
+
+### Phase 10
+
+15. **Probe before building.** `curl` Finnhub `/stock/earnings?symbol=TSLA` with the real key; GDELT
+    from a `wrangler dev` Worker rather than a laptop; and EDGAR both with and without a
+    `User-Agent`, to confirm the 403. Write down what they actually said.
+16. `npm run build` — then temporarily add `VITE_REDDIT_CLIENT_ID` to `.env` and confirm the build
+    **fails**. Remove it.
+17. Press **F4**, type `TSLA`. Expect headlines from **four or more distinct domains spanning both
+    tiers** — a wire name and a tech or general name — four earnings quarters, recent filings on the
+    second tab, and a discussion list mixing Reddit and Hacker News. The panel meta names the sources
+    that answered.
+18. Toggle `ALL · WIRE · WEB`: WIRE is ticker-exact, WEB is name-matched, and the counts change.
+19. Type `BTC/USD` — the selector flips to CRYPTO, the earnings/filings panel is gone, headlines
+    still populate, and EDGAR is never called.
+20. Click through from an option position on F1: the field shows `AAPL 16JAN26 150C` and the screen
+    researches `AAPL`.
+21. **The partial-failure claim, by hand.** Comment `REDDIT_CLIENT_ID` out of `.dev.vars` and
+    restart: DISCUSSION shows only Hacker News, `missing` lists `reddit`, and every other panel is
+    unaffected. Repeat by pointing `gdelt.ts` at a dead host.
+22. Hit `/api/research?symbol=TSLA` twice inside five minutes; the second is a cache hit.
+23. At 390px: the nav scrolls, **the page does not scroll sideways**, grids drop to ~5 columns, and no
+    panel header wraps.
 
 ## Open items (not blocking)
 

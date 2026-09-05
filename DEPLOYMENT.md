@@ -112,7 +112,7 @@ interchangeable:
 | Store | Dashboard path | Available when | What goes here |
 |---|---|---|---|
 | **Build variables** | Settings → **Build** | Only while `npm run build` runs | Nothing — the two `VITE_*` values are committed in `.env.production` |
-| **Runtime secrets** | Settings → **Variables & Secrets** | Only while the Worker serves a request | Alpaca keys, Finnhub key, service-role key, JWT secret, invite code |
+| **Runtime secrets** | Settings → **Variables & Secrets** | Only while the Worker serves a request | Alpaca keys, Finnhub key, Reddit keys, service-role key, JWT secret, invite code |
 
 Cloudflare's docs are explicit: **build variables are not accessible at runtime.**
 The reverse is also true — runtime secrets are not visible during the build.
@@ -202,7 +202,14 @@ sample data until Phase 3 wires up live prices.
    ALPACA_API_SECRET_KEY
    FINNHUB_API_KEY
    CLUB_INVITE_CODE
+   REDDIT_CLIENT_ID
+   REDDIT_CLIENT_SECRET
    ```
+
+   The two Reddit values are optional and only power F4's discussion panel;
+   without them that one panel says it is unconfigured and nothing else changes.
+   `SEC_CONTACT` does **not** belong here — it is a plain var in
+   `wrangler.jsonc` and deploys with the code.
 
    Or set them from the CLI instead, which is less error-prone:
 
@@ -213,6 +220,8 @@ sample data until Phase 3 wires up live prices.
    npx wrangler secret put ALPACA_API_SECRET_KEY
    npx wrangler secret put FINNHUB_API_KEY
    npx wrangler secret put CLUB_INVITE_CODE
+   npx wrangler secret put REDDIT_CLIENT_ID
+   npx wrangler secret put REDDIT_CLIENT_SECRET
    ```
 
 6. Push to `main` to trigger a build. Pushes to other branches create preview
@@ -310,7 +319,7 @@ To exercise the handler locally, `wrangler dev --test-scheduled` exposes
 - [ ] Sign up with the invite code; confirm a wrong code is rejected
 - [ ] Buy a position; confirm cash decreases and the sector resolves
 - [ ] Short a position; confirm buying power drops by ~50% of notional
-- [ ] Open DevTools → Network and confirm **no** Alpaca, Finnhub, or
+- [ ] Open DevTools → Network and confirm **no** Alpaca, Finnhub, Reddit, or
       service-role key appears in any request or in the JS bundle
 - [ ] Place an order while the market is closed; confirm it is *queued*, not
       refused, and appears under working orders

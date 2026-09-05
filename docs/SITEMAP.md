@@ -38,13 +38,14 @@ be readable before there is an account to agree to them with.
 | F1 | `/` | Positions | `src/routes/Positions.tsx` | members |
 | F2 | `/trade` | Trade | `src/routes/Trade.tsx` | members |
 | F3 | `/leaderboard` | Leaderboard | `src/routes/Leaderboard.tsx` | members |
-| F4 | `/sectors` | Sectors | `src/routes/Sectors.tsx` | members |
-| F5 | `/admin` | Admin | `src/routes/Admin.tsx` | officers |
+| F4 | `/research` | Research | `src/routes/Research.tsx` | members |
+| F5 | `/sectors` | Sectors | `src/routes/Sectors.tsx` | members |
+| F6 | `/admin` | Admin | `src/routes/Admin.tsx` | officers |
 | — | `/legal`, `/legal/:doc` | Legal | `src/routes/Legal.tsx` | anyone |
 | — | `*` | Not found | `src/routes/NotFound.tsx` | members |
 
-Eight paths, and that is the whole client surface. `screensFor()` in
-`FunctionNav.tsx` filters F5 out for a member — the route still resolves and
+Nine paths, and that is the whole client surface. `screensFor()` in
+`FunctionNav.tsx` filters F6 out for a member — the route still resolves and
 the API still checks, because hiding a link is presentation and not a
 permission.
 
@@ -104,7 +105,37 @@ Standings grid      rank, member, equity, return, with the return drawn as a bar
 positions and fills, in place. Their resting orders are not in it and must not
 be.
 
-### F4 `/sectors` — Sectors
+### F4 `/research` — Research
+
+One screen answering a question about the **asset** rather than the portfolio.
+Type a ticker; get coverage from across the web, the company's own filings, and
+what retail is saying.
+
+```
+InstrumentSelect    EQUITY · CRYPTO, the F2 control reused verbatim
+SymbolSearch        the F2 field, with an `id` of its own
+AssetCard           name, sector, industry, live price — from the existing
+                    useSecurities + useQuotes hooks, so no new endpoint
+EarningsPanel       two tabs: EARNINGS (est/act/surprise) and FILINGS (8-K, 10-Q)
+HeadlinesPanel      the merged feed, filtered by ALL · WIRE · WEB
+DiscussionPanel     Reddit and Hacker News in one list, venue told by a column
+```
+
+**Entrances:** F4, `RESEARCH` in the command bar, and a row click from F1.
+**Exit:** `OPEN ↗` on any row, to the publisher.
+**Selection:** the tier filter and the instrument mode are both underlined text,
+not keycaps — they are modes, and the vocabulary is Phase 8's.
+
+Two things the screen must keep saying out loud. The **tier**, because WIRE is
+ticker-exact (Alpaca, Finnhub) and WEB is name-matched (GDELT, Hacker News), and
+a keyword search finds Apple the fruit. And **which sources answered**, in the
+panel meta, because six upstreams behind one endpoint means a thin feed should
+say whether that is the news or the plumbing.
+
+Crypto drops the earnings/filings panel rather than emptying it — a coin has no
+10-Q — and headlines take the space.
+
+### F5 `/sectors` — Sectors
 
 ```
 PortfolioStats
@@ -130,7 +161,7 @@ the benchmark hairline.
 map. **Exit:** clicking a holding — in the drill-down or on the map — opens the
 ticket on that symbol.
 
-### F5 `/admin` — Admin
+### F6 `/admin` — Admin
 
 Officer-only. The role is read from the database on every request, never from
 the session token.
@@ -145,7 +176,8 @@ Corrections         void or amend a fill, then replay the portfolio
 
 ### `/legal` — Terms of use and privacy policy
 
-Two documents behind one panel with two tabs, and **deliberately not an F6**.
+Two documents behind one panel with two tabs, and **deliberately not a function
+key** — not an F6 before Phase 10, and not an F7 after it.
 A function key would rank a legal document alongside the trade ticket, and the
 member who wants it is never looking for it in a hurry. It is reached from the
 quiet end of the nav row, from the login screen, and from the command bar.
@@ -175,12 +207,13 @@ The terminal is keyboard-first, so most navigation never touches an anchor.
 
 | Gesture | Effect |
 |---|---|
-| `F1`–`F5` | switch screens; suppressed while a text field has focus |
+| `F1`–`F6` | switch screens; suppressed while a text field has focus |
 | `/` | focus the command bar |
 | `POSITIONS`, `F3`, … | a screen name or key in the command bar navigates |
 | `LEGAL`, `TERMS`, `PRIVACY` | the legal screen, which has no key of its own |
 | `NVDA` | any other word is a ticker lookup, priced inline |
 | `BUY 10 NVDA`, `SHORT $500 TSLA @ 240` | opens `/trade` with the ticket filled |
+| `RESEARCH`, `TSLA` | Research by name; a bare ticker is still a price lookup |
 | row click | Positions and Sectors both land on the ticket |
 | `Esc` | clear the command bar |
 
@@ -215,6 +248,7 @@ the asset store.
 | POST | `/api/market/universe/sync` | officer |
 | GET | `/api/portfolio` | member — unpriced, on purpose |
 | GET | `/api/portfolio/history?range=` | member — priced; `1D` is a different chart |
+| GET | `/api/research?symbol=` | member — six upstreams, one answer, partial failure named |
 | POST | `/api/portfolio/snapshot` | officer |
 | POST | `/api/orders` | member — no price field, ever |
 | GET | `/api/orders` | member |

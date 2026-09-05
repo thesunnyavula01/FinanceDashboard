@@ -89,7 +89,13 @@
     "APP_NAME": "FINANCE CLUB TERMINAL",
     "SUPABASE_URL": "https://vtlqkgpcfdhslqahivzf.supabase.co",
     "ALPACA_DATA_FEED": "iex",
-    "QUOTE_CACHE_TTL": "20"
+    "QUOTE_CACHE_TTL": "20",
+
+    // Sent as the User-Agent on every SEC EDGAR request. The SEC refuses an
+    // unidentified caller with 403 rather than throttling it, and asks that the
+    // address be one a person actually reads. Not a secret: being reachable is
+    // the entire point of it. Replace the placeholder before Phase 10 ships.
+    "SEC_CONTACT": "Finance Club Terminal - set-me@example.com"
   }
 
   // Secrets are NOT listed here. They come from .dev.vars locally and from

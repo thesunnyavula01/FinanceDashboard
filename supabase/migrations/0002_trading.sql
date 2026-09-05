@@ -2,7 +2,7 @@
 -- Finance Club Terminal — the trading engine
 --
 -- One function, place_order(), and it is the only thing in the system allowed
--- to move money. Non-negotiable rule 4 in CLAUDE.md exists because of a very
+-- to move money. Non-negotiable rule 4 in DIRECTIONS.MD exists because of a very
 -- specific failure: a member with two browser tabs open presses BUY in both.
 -- If cash were read into application code, decremented there and written back,
 -- both tabs would read the same balance and both would succeed, and the club

@@ -9,7 +9,7 @@
  * Two providers exist on purpose, and the split is about batching, not
  * features: Alpaca returns 100+ symbols per HTTP call, Finnhub returns one.
  * Prices are polled every 20 seconds; sectors are fetched once per ticker
- * ever. See CLAUDE.md for the rate-limit arithmetic.
+ * ever. See DIRECTIONS.MD for the rate-limit arithmetic.
  */
 
 export type SessionState = "OPEN" | "CLOSED" | "PRE" | "POST";

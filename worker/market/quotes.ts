@@ -5,7 +5,7 @@ import type { PriceProvider, Quote } from "./provider.ts";
 /**
  * The shared quote cache.
  *
- * The whole point of this file is the number in CLAUDE.md: a hundred members
+ * The whole point of this file is the number in DIRECTIONS.MD: a hundred members
  * refreshing every 20 seconds must not become a hundred requests to Alpaca. It
  * gets there in three tiers, cheapest first.
  *

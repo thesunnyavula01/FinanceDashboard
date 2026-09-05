@@ -131,11 +131,51 @@ so does the deployed site — Cloudflare runs the Worker on its own machines.
 
 ---
 
+## 7. Reddit — the discussion panel (Phase 10 / F4 Research)
+
+The **only** new credential the Research screen needs. Everything else on that
+screen runs on keys you already have, or on endpoints that need no key at all.
+
+1. Go to <https://www.reddit.com/prefs/apps> → **create app** → type **script**.
+2. Name it anything; the redirect URI is unused but required — `http://localhost`
+   is fine.
+3. Copy the id under the app name into `.dev.vars` → `REDDIT_CLIENT_ID`, and the
+   **secret** field into `REDDIT_CLIENT_SECRET`.
+
+Free for non-commercial use at 100 queries/minute per client id. A school club
+qualifies, same as Finnhub — don't put ads on this or charge for it.
+
+Leave both blank and nothing breaks: the discussion panel says it is
+unconfigured and the rest of the screen carries on.
+
+### The three sources that need no signup at all
+
+Do not go looking for keys for these. They have none.
+
+| Source | Why it needs nothing | What it brings |
+|---|---|---|
+| **GDELT DOC 2.0** | a public research project | 100,000+ news outlets worldwide — TechCrunch, The Verge, Ars Technica, trade and local press |
+| **SEC EDGAR** | a US government disclosure system | the filings themselves: 8-K, 10-Q, 10-K, and reported XBRL figures |
+| **Hacker News** (Algolia) | an open search index | tech-community discussion |
+
+EDGAR is the one with a condition rather than a key: every request must carry a
+`User-Agent` naming you and a **reachable email**, or the SEC answers 403. That
+address lives in `wrangler.jsonc` → `SEC_CONTACT`, where a placeholder is waiting
+to be replaced. It is deliberately not a secret — being contactable is the point.
+
+And two things that are deliberately *not* wired up, so nobody goes hunting:
+**X/Twitter**, which ended its free tier in February 2026 and now bills per post
+read; and any dedicated crypto-news vendor, all of which went paid during 2026.
+Crypto headlines come from Alpaca and Finnhub instead, which still cover coins
+free.
+
+---
+
 ## Done?
 
-`.env` should have 2 filled values, `.dev.vars` should have 6 filled values plus
-the invite code. Then say the word and we'll start Phase 1 (scaffold + the
-black/amber terminal design system).
+`.env` should have 2 filled values, and `.dev.vars` should have 6 filled values
+plus the invite code — 8 plus the invite code once Reddit is added for Phase 10,
+which is optional and can wait.
 
 Before deploying, each secret gets pushed separately:
 
@@ -146,4 +186,9 @@ npx wrangler secret put ALPACA_API_KEY_ID
 npx wrangler secret put ALPACA_API_SECRET_KEY
 npx wrangler secret put FINNHUB_API_KEY
 npx wrangler secret put CLUB_INVITE_CODE
+npx wrangler secret put REDDIT_CLIENT_ID       # Phase 10, optional
+npx wrangler secret put REDDIT_CLIENT_SECRET   # Phase 10, optional
 ```
+
+`SEC_CONTACT` is **not** in that list. It is a plain var in `wrangler.jsonc` and
+ships with the deploy.

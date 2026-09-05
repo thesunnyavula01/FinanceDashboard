@@ -19,7 +19,7 @@ import {
  *
  * Chosen for one reason: it batches. A hundred symbols go out in one request,
  * which is what keeps a club of a hundred members polling every 20 seconds
- * inside a 200 request/minute free tier. See CLAUDE.md for the arithmetic.
+ * inside a 200 request/minute free tier. See DIRECTIONS.MD for the arithmetic.
  *
  * Free-tier nuance that shapes the code below: `dailyBar` and `prevDailyBar`
  * in a snapshot are the full consolidated tape, identical to what paying

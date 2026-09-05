@@ -174,7 +174,7 @@ feed once, the same habit as the curve naming whether it was replayed or stored.
 - `stock/candle` is premium now (403 on free keys). Do not call it.
 - Free tier is personal / non-commercial use. A school club qualifies.
 
-### Research: seven sources, one of which needs a signup (Phase 10)
+### Research: six sources, none of which needs a signup (Phase 10)
 
 **Planned, not built.** F4 answers a question about the asset rather than the
 portfolio, and that needs breadth of publisher rather than freshness of tick —
@@ -189,7 +189,7 @@ gone. **Marketaux** returns three articles per response on free and
 **Polygon.io** allows five requests a minute. None of that is buyable at club
 scale.
 
-What is left is broader than what was lost, and **only Reddit needs an account**:
+What is left is broader than what was lost, and **none of it needs an account**:
 
 - **Alpaca** `v1beta1/news` - the Benzinga wire, on the key already in use, at
   200 req/min. Batched by `symbols` and it covers **crypto pairs as well as
@@ -207,12 +207,10 @@ What is left is broader than what was lost, and **only Reddit needs an account**
   must carry a `User-Agent` naming a reachable contact or the SEC answers 403**,
   which is what `SEC_CONTACT` is - a var and not a secret, because being
   contactable is the point of it.
-- **Hacker News** (Algolia) - no key. Tech-community discussion. Query
-  `search_by_date` with a recency filter: the default relevance sort returns
-  2018 stories and the panel becomes a museum without saying so.
-- **Reddit** - the one signup. Free for non-commercial use at 100 QPM per OAuth
-  client, which a school club qualifies for on the same reasoning as Finnhub's
-  tier. Absent it, the discussion panel says so and nothing else changes.
+- **Hacker News** (Algolia) - no key. Tech-community discussion, and what
+  fills the slot X used to. Query `search_by_date` with a recency filter: the
+  default relevance sort returns 2018 stories and the panel becomes a museum
+  without saying so.
 
 **Wire and web are not the same claim, and the screen says which.** Alpaca and
 Finnhub search by *ticker*; GDELT and Hacker News search by *keyword*, so they
@@ -222,16 +220,16 @@ Gap the retailer, so `ALL · WIRE · WEB` is on screen and a ticker-exact row
 never looks identical to a name-matched one. Same habit as the curve naming
 whether it was replayed or stored.
 
-**Six upstreams sit behind one `/api/research` call**, cached 5-15 minutes in the
-same two tiers as the chain. A hundred members reading TSLA cost one round of
-six requests, not six hundred. The binding ceiling is Finnhub's 60/min, shared
+**Five upstreams sit behind one `/api/research` call**, cached 5-15 minutes in
+the same two tiers as the chain. A hundred members reading TSLA cost one round
+of five requests, not five hundred. The binding ceiling is Finnhub's 60/min, shared
 with the sector enrichment already budgeted against in `securities.ts`.
 
 **Partial failure is reported, never fatal.** `Promise.allSettled` across every
 source and a `sources` / `missing` pair in the payload, so a thin feed says
 whether that is the news or the plumbing. `describeMarketError` runs only when
-every source failed. With six upstreams this matters far more than with two: the
-screen must not go dark because GDELT rate-limited us.
+every source failed. With five upstreams this matters far more than with two:
+the screen must not go dark because GDELT rate-limited us.
 
 **Summaries are text, never HTML.** There is no sanitizer in this repo and no
 `dangerouslySetInnerHTML` anywhere; a news summary would be the first untrusted
@@ -1330,7 +1328,6 @@ worker/market/research.ts       Phase 10: fan-out, merge, dedupe, two-tier cache
 worker/market/gdelt.ts          Phase 10: global press. No credential
 worker/market/edgar.ts          Phase 10: SEC filings + XBRL. No credential
 worker/market/hackernews.ts     Phase 10: tech discussion. No credential
-worker/market/reddit.ts         Phase 10: retail discussion. The one new credential
 worker/routes/                  auth, quotes, market, orders, portfolio, leaderboard, admin,
                                 research
 supabase/migrations/*.sql       schema, RLS policies, place_order() RPC
@@ -1400,7 +1397,7 @@ GET  /api/orders/working              resting orders (owner-only)
 DELETE /api/orders/working/:id        cancel, releasing the reservation
 POST /api/orders/sweep                force a sweep (admin only)
 GET  /api/research?symbol=            Phase 10. News, earnings, filings and
-                                      discussion for one symbol. Six upstreams,
+                                      discussion for one symbol. Five upstreams,
                                       one answer; `sources` and `missing` name
                                       who replied, so a thin feed says why
 GET  /api/leaderboard                 the standings. Priced, and memoised per season
@@ -1467,13 +1464,13 @@ step 6. Build and deploy are unaffected.
 - [x] **Phase 8 (deploy)** - `0006_derivatives.sql` applied and verified
       2026-09-02.
 - [ ] **Phase 10 (code)** - Research on F4: news, earnings, filings and
-      discussion for any ticker, across seven sources. **Adds no migration** -
-      nothing is persisted, so there is no `0008_*.sql` to look for. Scaffolded
-      but not built: `SEC_CONTACT` is in `wrangler.jsonc`, `REDDIT_CLIENT_ID`
-      and `REDDIT_CLIENT_SECRET` are in `Env` and covered by the build's leak
-      guard, and the plan is in `docs/PLAN.md`. Two things to `curl` before
-      writing a panel: whether Finnhub's `stock/earnings` is free on this key,
-      and whether GDELT answers from a Worker.
+      discussion for any ticker, across six sources. **Adds no migration and no
+      credential** - nothing is persisted, so there is no `0008_*.sql` to look
+      for, and every source is either a key already in use or an open endpoint.
+      The only setup is `SEC_CONTACT` in `wrangler.jsonc`, which is a var and
+      not a secret. Two things to `curl` before writing a panel: whether
+      Finnhub's `stock/earnings` is free on this key, and whether GDELT answers
+      from a Worker.
 
 ## Reference docs
 

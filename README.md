@@ -80,10 +80,10 @@ Both migrations past the initial schema — `0006_derivatives.sql` and
 `0007_stop_orders.sql` — are applied and verified against `pg_proc`. The test
 suite is 286 tests over the Worker and the build guards, and it passes.
 
-Phase 10 adds one credential and no migration. Its plan, the seven sources it
+Phase 10 adds no credential and no migration. Its plan, the six sources it
 reads and the two things to `curl` before writing any of it are in
-[`docs/PLAN.md`](./docs/PLAN.md); the key itself is step 7 of
-[`SETUP.md`](./SETUP.md).
+[`docs/PLAN.md`](./docs/PLAN.md), and step 7 of [`SETUP.md`](./SETUP.md) says
+why there is nothing to sign up for.
 
 What is left is operational rather than unbuilt: set the runtime secrets and
 `npm run deploy`, then walk the checklist at the end of

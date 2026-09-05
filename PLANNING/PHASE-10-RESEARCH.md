@@ -1,11 +1,11 @@
 # Phase 10 — Research on F4
 
 The build sheet. The *why* is in [`DIRECTIONS.MD`](./DIRECTIONS.MD) under
-"Research: seven sources" and in [`docs/PLAN.md`](../docs/PLAN.md) under
+"Research: six sources" and in [`docs/PLAN.md`](../docs/PLAN.md) under
 "Phase 10"; this file is the order of work.
 
-**Status: planned, scaffolded, not built.** The credential slots exist and the
-build guard covers them. No feature code has been written.
+**Status: planned, not built.** No feature code has been written, and none of
+it needs a credential you do not already have.
 
 ---
 
@@ -25,22 +25,29 @@ write the answers down here — the same habit that made Phase 8 worth reading.
       panel, which is the partial-failure design doing its job.
 - [ ] **Confirm EDGAR 403s without a `User-Agent`**, so the requirement is real
       and not folklore, and set `SEC_CONTACT` in `wrangler.jsonc` to a real
-      address before anything ships.
+      address before anything ships. This is the **only** setup step the phase
+      has.
 
 ---
 
 ## 1. Credentials
 
-Done already — nothing to write, only to fill in.
+**There are none.** This phase adds no key, no signup and no secret.
 
-| Where | What | State |
-|---|---|---|
-| `.dev.vars` | `REDDIT_CLIENT_ID`, `REDDIT_CLIENT_SECRET` | slots documented in `.env.example`, **awaiting your key** |
-| `wrangler.jsonc` | `SEC_CONTACT` | placeholder committed, **replace before deploy** |
-| `worker/types.ts` | all three, secrets optional | done |
-| `scripts/check-client-env.ts` | `"REDDIT"` in `SECRET_MARKERS` | done, and proven to fail the build |
+| Source | Where its credential comes from |
+|---|---|
+| Alpaca news | `ALPACA_API_KEY_ID` / `ALPACA_API_SECRET_KEY`, already in `.dev.vars` |
+| Finnhub news + earnings | `FINNHUB_API_KEY`, already in `.dev.vars` |
+| GDELT | none — open endpoint |
+| SEC EDGAR | none — open endpoint, but requires a `User-Agent` |
+| Hacker News | none — open endpoint |
 
-GDELT, SEC EDGAR and Hacker News need no credential. Do not go looking for one.
+The one thing to set is `SEC_CONTACT` in `wrangler.jsonc`, which is a **var and
+not a secret**: the SEC requires a reachable contact address and answers 403 to
+an unidentified caller, so being public is the point of it. It ships with the
+code and needs no `wrangler secret put`.
+
+Do not go looking for keys for GDELT, EDGAR or Hacker News. They have none.
 
 ---
 
@@ -62,7 +69,6 @@ new route code.
 | `worker/market/gdelt.ts` | **none** | `mode=artlist&format=json`, declared `User-Agent`, keyword built from the resolved company name. |
 | `worker/market/edgar.ts` | **none** | `efts.sec.gov` for filings, `data.sec.gov` for XBRL. Ticker→CIK from `www.sec.gov/files/company_tickers.json`, cached a week. **`User-Agent` or 403.** |
 | `worker/market/hackernews.ts` | **none** | `search_by_date` with a `created_at_i` filter. The default relevance sort returns 2018 stories and the panel becomes a museum without saying so. |
-| `worker/market/reddit.ts` | **the one** | `redditFromEnv()` throwing `MarketConfigError` naming `REDDIT_CLIENT_ID`. OAuth client-credentials token cached in the isolate (24h), one retry on 401, no loop. |
 | `worker/market/research.ts` | — | fan-out, merge, dedupe, cache. Exports `loadResearch(env, symbol, waitUntil?)` and `forgetResearch()`. |
 | `worker/routes/research.ts` | — | `GET /api/research?symbol=`, `research.use("*", requireAuth)`. |
 
@@ -95,7 +101,7 @@ Keys slash-prefixed by kind, as in `chain.ts`: `wire/${symbol}`, `web/${symbol}`
 `earnings/${symbol}`, `filings/${symbol}`, `social/${symbol}`.
 
 A symbol with nothing to show is cached too, for longer — the reasoning behind
-`NEGATIVE_TTL_SECONDS` in `quotes.ts`. One obscure ticker must not send six
+`NEGATIVE_TTL_SECONDS` in `quotes.ts`. One obscure ticker must not send five
 providers a request on every visit for the rest of the season.
 
 ### The response shape
@@ -103,7 +109,7 @@ providers a request on every visit for the rest of the season.
 ```jsonc
 { "symbol": "TSLA", "assetClass": "EQUITY", "name": "Tesla Inc",
   "headlines": [...], "earnings": [...], "filings": [...], "discussion": [...],
-  "sources": ["alpaca", "finnhub", "edgar", "hackernews", "reddit"],
+  "sources": ["alpaca", "finnhub", "edgar", "hackernews"],
   "missing": ["gdelt"],
   "asOf": "2026-09-05T14:02:11.318Z" }
 ```
@@ -143,8 +149,8 @@ SYMBOL [ TSLA                    ]
 │  428.50   +2.14%   Automobiles      │  │ Q3  EST 0.62  ACT 0.72 │
 └─────────────────────────────────────┘  └────────────────────────┘
 ┌ HEADLINES   ALL · WIRE · WEB ───────┐  ┌ DISCUSSION ────────────┐
-│ 12m  Reuters     Tesla opens …      │  │ 340↑ r/stocks     …    │
-│ 1h   TechCrunch  Inside the new …   │  │ 812↑ HN           …    │
+│ 12m  Reuters     Tesla opens …      │  │ 812↑ 4h   Inside the … │
+│ 1h   TechCrunch  Inside the new …   │  │ 214↑ 9h   Why the new… │
 └─────────────────────────────────────┘  └────────────────────────┘
 ```
 
@@ -153,7 +159,7 @@ SYMBOL [ TSLA                    ]
 | Asset card | — · `useSecurities` + `useQuotes`, so no new endpoint |
 | EARNINGS / FILINGS | two tabs of **one** `Panel` — it supports them natively and they cost no height |
 | HEADLINES | Age · ~Source · Headline · ~Tier |
-| DISCUSSION | Score · ~Venue · Title · ~Age — Reddit and HN in one list |
+| DISCUSSION | Score · ~Age · Title · ~Comments — Hacker News |
 
 Rules that are not negotiable on this screen:
 
@@ -210,14 +216,8 @@ comment naming the class of bug the file defends against, ending
 `worker/market/hackernews.test.ts`
 - [ ] the query sorts by date with a recency filter, not by relevance
 
-`worker/market/reddit.test.ts`
-- [ ] the token is fetched once and reused
-- [ ] a 401 refetches once and does not loop
-
 `scripts/mobile-layout.test.ts`
 - [ ] `Research.tsx`'s stacking grid carries `grid-cols-1`
-
-`scripts/check-client-env.test.ts` — **already done**, both Reddit names covered.
 
 ---
 
@@ -237,6 +237,7 @@ The two that catch the most:
 
 - **Item 17** — headlines from four or more distinct domains spanning both
   tiers. Fewer than that and the merge or a provider is silently failing.
-- **Item 21** — comment `REDDIT_CLIENT_ID` out of `.dev.vars` and restart.
-  DISCUSSION shows only Hacker News, `missing` lists `reddit`, every other panel
-  is unaffected. That is the whole partial-failure design, checked by hand.
+- **Item 21** — point `gdelt.ts` at a dead host and restart. HEADLINES falls
+  back to the wire sources, `missing` lists `gdelt`, the panel meta says so, and
+  every other panel is unaffected. That is the whole partial-failure design,
+  checked by hand.

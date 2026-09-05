@@ -118,7 +118,7 @@ AssetCard           name, sector, industry, live price — from the existing
                     useSecurities + useQuotes hooks, so no new endpoint
 EarningsPanel       two tabs: EARNINGS (est/act/surprise) and FILINGS (8-K, 10-Q)
 HeadlinesPanel      the merged feed, filtered by ALL · WIRE · WEB
-DiscussionPanel     Reddit and Hacker News in one list, venue told by a column
+DiscussionPanel     Hacker News — what the tech community is reading
 ```
 
 **Entrances:** F4, `RESEARCH` in the command bar, and a row click from F1.
@@ -129,7 +129,7 @@ not keycaps — they are modes, and the vocabulary is Phase 8's.
 Two things the screen must keep saying out loud. The **tier**, because WIRE is
 ticker-exact (Alpaca, Finnhub) and WEB is name-matched (GDELT, Hacker News), and
 a keyword search finds Apple the fruit. And **which sources answered**, in the
-panel meta, because six upstreams behind one endpoint means a thin feed should
+panel meta, because five upstreams behind one endpoint means a thin feed should
 say whether that is the news or the plumbing.
 
 Crypto drops the earnings/filings panel rather than emptying it — a coin has no
@@ -248,7 +248,7 @@ the asset store.
 | POST | `/api/market/universe/sync` | officer |
 | GET | `/api/portfolio` | member — unpriced, on purpose |
 | GET | `/api/portfolio/history?range=` | member — priced; `1D` is a different chart |
-| GET | `/api/research?symbol=` | member — six upstreams, one answer, partial failure named |
+| GET | `/api/research?symbol=` | member — five upstreams, one answer, partial failure named |
 | POST | `/api/portfolio/snapshot` | officer |
 | POST | `/api/orders` | member — no price field, ever |
 | GET | `/api/orders` | member |

@@ -87,10 +87,6 @@ test("any VITE_-prefixed Worker secret is caught, not just the two required", ()
     "VITE_SUPABASE_JWT_SECRET",
     "VITE_ALPACA_API_KEY_ID",
     "VITE_FINNHUB_API_KEY",
-    // Both halves of a Reddit credential. The generic "SECRET" marker already
-    // catches the second; only an explicit "REDDIT" catches the first.
-    "VITE_REDDIT_CLIENT_ID",
-    "VITE_REDDIT_CLIENT_SECRET",
     "VITE_CLUB_INVITE_CODE",
   ]) {
     const problems = checkClientEnv({ ...GOOD, [leaked]: "anything" });

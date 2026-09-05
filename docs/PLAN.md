@@ -80,7 +80,7 @@ no free search, and the legacy Basic plan was retired outright in June. **CoinDe
 **Marketaux** allows 100 requests/day and returns three articles per response. **Polygon.io** free is
 5 requests/minute. None of those is buyable at club scale.
 
-What survived is broader than what was lost, and only one of the seven needs a signup:
+What survived is broader than what was lost, and **none of the six needs a signup**:
 
 | Source | Credential | Ceiling | Brings |
 |---|---|---|---|
@@ -89,14 +89,13 @@ What survived is broader than what was lost, and only one of the seven needs a s
 | Finnhub `stock/earnings` | same key | 60/min | actual-vs-estimate (**probe first**, see Phase 10) |
 | **GDELT DOC 2.0** | **none, ever** | courtesy | 100,000+ outlets worldwide — TechCrunch, The Verge, Ars Technica, trade and local press |
 | **SEC EDGAR** (`efts` + `data.sec.gov`) | **none, ever** | 10/sec | the primary documents: 8-K, 10-Q, 10-K, XBRL actuals |
-| **Hacker News** (Algolia) | **none, ever** | courtesy | tech-community discussion |
-| Reddit Data API | **the one signup** | 100/min per client | retail discussion — the slot X can no longer fill |
+| **Hacker News** (Algolia) | **none, ever** | courtesy | tech-community discussion, and the discussion slot X can no longer fill |
 
 EDGAR's condition is a `User-Agent` naming a reachable contact, or it answers 403 rather than
 throttling. That is `SEC_CONTACT`, a var rather than a secret because being contactable is the point.
 
-**Rate-limit math, again.** Six upstreams behind one `/api/research` call, cached 5–15 minutes at the
-edge, means a hundred members reading TSLA cost **one round of six calls, not six hundred** — the same
+**Rate-limit math, again.** Five upstreams behind one `/api/research` call, cached 5–15 minutes at the
+edge, means a hundred members reading TSLA cost **one round of five calls, not five hundred** — the same
 sum the quote cache does at 20 seconds. The binding constraint is Finnhub's 60/min, shared with the
 sector enrichment `securities.ts` already budgets against: ~30 distinct tickers viewed in a 5-minute
 window is ~6 Finnhub calls/min. Alpaca's 200/min and EDGAR's 10/sec are never approached.
@@ -368,8 +367,8 @@ Adds **no migration**. Nothing is persisted: news is ephemeral and lives in the 
 earnings and filings are hours-long entries. Like Phase 7, there is no `0008_*.sql` to go looking
 for.
 
-The provider table is under "News providers" above. The short version: **one signup (Reddit)**, two
-existing keys reused, three sources that need no credential at all.
+The provider table is under "News providers" above. The short version: **no new credential at all** —
+two existing keys reused, and three sources that have none to obtain.
 
 Load-bearing decisions, each of which had a cheaper alternative that was rejected:
 
@@ -379,13 +378,13 @@ Load-bearing decisions, each of which had a cheaper alternative that was rejecte
   make the command bar's `s.key === command` lookup answer differently per audience. A key means one
   screen for everyone; officers simply have one more. Legal stays keyless and is now deliberately not
   F7, which is the same argument moved up one place.
-- **One endpoint, not six.** `/api/research?symbol=` fans out and merges, the way
-  `/api/market/chain` assembles expirations and a priced chain from several upstream calls. Six
-  client-side poll loops per member would multiply the club by six against the tightest ceiling in
+- **One endpoint, not five.** `/api/research?symbol=` fans out and merges, the way
+  `/api/market/chain` assembles expirations and a priced chain from several upstream calls. Five
+  client-side poll loops per member would multiply the club by five against the tightest ceiling in
   the stack.
 - **Partial failure is reported, never fatal.** `Promise.allSettled` across every source, and the
   payload carries `sources` and `missing` so the panel can say *why* a feed is thin.
-  `describeMarketError` runs only when every source failed. With six upstreams this matters far more
+  `describeMarketError` runs only when every source failed. With five upstreams this matters far more
   than it did with two: the screen must not go dark because GDELT rate-limited us.
 - **The wire/web split is labelled, not blended.** Alpaca and Finnhub search by ticker; GDELT and
   Hacker News search by *keyword*, so they need the company's name — which is why the asset card's
@@ -433,7 +432,6 @@ worker/market/research.ts          -- Phase 10: fan-out, merge, dedupe, two-tier
 worker/market/gdelt.ts             -- Phase 10: global press, no credential
 worker/market/edgar.ts             -- Phase 10: SEC filings + XBRL, no credential
 worker/market/hackernews.ts        -- Phase 10: tech discussion, no credential
-worker/market/reddit.ts            -- Phase 10: retail discussion, the one new credential
 worker/routes/research.ts          -- Phase 10: GET /api/research?symbol=
 src/routes/Research.tsx            -- Phase 10: F4
 worker/market/provider.ts          -- swappable data-provider interface
@@ -487,20 +485,20 @@ src/routes/{Login,Dashboard,Trade,Leaderboard,Sectors,Admin}.tsx
 15. **Probe before building.** `curl` Finnhub `/stock/earnings?symbol=TSLA` with the real key; GDELT
     from a `wrangler dev` Worker rather than a laptop; and EDGAR both with and without a
     `User-Agent`, to confirm the 403. Write down what they actually said.
-16. `npm run build` — then temporarily add `VITE_REDDIT_CLIENT_ID` to `.env` and confirm the build
-    **fails**. Remove it.
+16. `npm run build` and `npm test` — both clean. Phase 10 introduces no secret, so there is no new
+    leak-guard case to add; the existing ones must still pass.
 17. Press **F4**, type `TSLA`. Expect headlines from **four or more distinct domains spanning both
     tiers** — a wire name and a tech or general name — four earnings quarters, recent filings on the
-    second tab, and a discussion list mixing Reddit and Hacker News. The panel meta names the sources
-    that answered.
+    second tab, and a discussion list from Hacker News. The panel meta names the sources that
+    answered.
 18. Toggle `ALL · WIRE · WEB`: WIRE is ticker-exact, WEB is name-matched, and the counts change.
 19. Type `BTC/USD` — the selector flips to CRYPTO, the earnings/filings panel is gone, headlines
     still populate, and EDGAR is never called.
 20. Click through from an option position on F1: the field shows `AAPL 16JAN26 150C` and the screen
     researches `AAPL`.
-21. **The partial-failure claim, by hand.** Comment `REDDIT_CLIENT_ID` out of `.dev.vars` and
-    restart: DISCUSSION shows only Hacker News, `missing` lists `reddit`, and every other panel is
-    unaffected. Repeat by pointing `gdelt.ts` at a dead host.
+21. **The partial-failure claim, by hand.** Point `gdelt.ts` at a dead host and restart: HEADLINES
+    falls back to the wire sources, `missing` lists `gdelt`, the panel meta says so, and every other
+    panel is unaffected. Repeat with `edgar.ts` to confirm FILINGS degrades the same way.
 22. Hit `/api/research?symbol=TSLA` twice inside five minutes; the second is a cache hit.
 23. At 390px: the nav scrolls, **the page does not scroll sideways**, grids drop to ~5 columns, and no
     panel header wraps.

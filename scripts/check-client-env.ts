@@ -38,7 +38,6 @@ const SECRET_MARKERS = [
   "JWT_SECRET",
   "ALPACA",
   "FINNHUB",
-  "REDDIT",
   "INVITE_CODE",
   "SECRET",
 ];

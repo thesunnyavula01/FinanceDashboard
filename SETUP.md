@@ -131,24 +131,13 @@ so does the deployed site — Cloudflare runs the Worker on its own machines.
 
 ---
 
-## 7. Reddit — the discussion panel (Phase 10 / F4 Research)
+## 7. Research (Phase 10 / F4) — no new key at all
 
-The **only** new credential the Research screen needs. Everything else on that
-screen runs on keys you already have, or on endpoints that need no key at all.
+Nothing to sign up for. The Research screen runs entirely on the Alpaca and
+Finnhub keys you already have, plus three sources that have no credential to
+obtain.
 
-1. Go to <https://www.reddit.com/prefs/apps> → **create app** → type **script**.
-2. Name it anything; the redirect URI is unused but required — `http://localhost`
-   is fine.
-3. Copy the id under the app name into `.dev.vars` → `REDDIT_CLIENT_ID`, and the
-   **secret** field into `REDDIT_CLIENT_SECRET`.
-
-Free for non-commercial use at 100 queries/minute per client id. A school club
-qualifies, same as Finnhub — don't put ads on this or charge for it.
-
-Leave both blank and nothing breaks: the discussion panel says it is
-unconfigured and the rest of the screen carries on.
-
-### The three sources that need no signup at all
+### The three sources that need no signup
 
 Do not go looking for keys for these. They have none.
 
@@ -166,16 +155,15 @@ to be replaced. It is deliberately not a secret — being contactable is the poi
 And two things that are deliberately *not* wired up, so nobody goes hunting:
 **X/Twitter**, which ended its free tier in February 2026 and now bills per post
 read; and any dedicated crypto-news vendor, all of which went paid during 2026.
-Crypto headlines come from Alpaca and Finnhub instead, which still cover coins
-free.
+Discussion comes from Hacker News instead, and crypto headlines from Alpaca and
+Finnhub, which still cover coins free.
 
 ---
 
 ## Done?
 
 `.env` should have 2 filled values, and `.dev.vars` should have 6 filled values
-plus the invite code — 8 plus the invite code once Reddit is added for Phase 10,
-which is optional and can wait.
+plus the invite code. Phase 10 adds nothing to either.
 
 Before deploying, each secret gets pushed separately:
 
@@ -186,8 +174,6 @@ npx wrangler secret put ALPACA_API_KEY_ID
 npx wrangler secret put ALPACA_API_SECRET_KEY
 npx wrangler secret put FINNHUB_API_KEY
 npx wrangler secret put CLUB_INVITE_CODE
-npx wrangler secret put REDDIT_CLIENT_ID       # Phase 10, optional
-npx wrangler secret put REDDIT_CLIENT_SECRET   # Phase 10, optional
 ```
 
 `SEC_CONTACT` is **not** in that list. It is a plain var in `wrangler.jsonc` and

@@ -31,13 +31,6 @@ export interface Env {
   ALPACA_API_SECRET_KEY?: string;
   FINNHUB_API_KEY?: string;
   CLUB_INVITE_CODE?: string;
-  /**
-   * Reddit's Data API, for F4's discussion panel. The only credential Phase 10
-   * adds: GDELT, SEC EDGAR and Hacker News need no key at all, and news for
-   * both asset classes comes off the Alpaca and Finnhub keys already above.
-   */
-  REDDIT_CLIENT_ID?: string;
-  REDDIT_CLIENT_SECRET?: string;
 }
 
 export type AppBindings = { Bindings: Env };

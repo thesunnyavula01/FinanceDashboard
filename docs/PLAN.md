@@ -358,7 +358,7 @@ Load-bearing decisions:
 
 ### Phase 10 — Research on F4
 
-**Planned, not built.** One screen answering a question about the *asset* rather than the portfolio:
+**Implemented 2026-09-05; deployment verification pending.** One screen answering a question about the *asset* rather than the portfolio:
 type a ticker, get coverage from across the web — financial wire, tech and general press, the
 company's own SEC filings, and what retail is saying. Split by asset class the way everything else
 here is, and at the same density.
@@ -395,6 +395,11 @@ Load-bearing decisions, each of which had a cheaper alternative that was rejecte
 - **Summaries render as text, never HTML.** There is no sanitizer in this repo and no
   `dangerouslySetInnerHTML` anywhere; a news summary would be the first untrusted markup in the app.
   Tags are stripped in the Worker and the client receives a plain string.
+- **Every visible title must identify the asset.** Provider ticker tags can be wrong: Finnhub
+  returned an Amazon-only article tagged TSLA. Require a direct company-name or ticker match for
+  both headline tiers and discussion, including warm cache reads. Summary mentions, URLs and
+  CEO/product aliases alone do not qualify. Common-word tickers and ambiguous names need extra
+  evidence. A shorter relevant list is the intended result when broad upstream searches add noise.
 - **Paywalls are marked, not filtered.** No API reports them, so a small domain set earns a dim
   marker and loses ties on sort. A WSJ headline is still information; hiding it would be the app
   deciding what a member may know.
@@ -406,17 +411,23 @@ Load-bearing decisions, each of which had a cheaper alternative that was rejecte
   `forgetResearch()` export. There is no per-symbol batching to do here, so the class-based
   three-tier cache would be machinery without a job.
 
-Two things to establish by `curl` before writing any panel — the habit that made Phase 8 worth
-reading:
+Preflight results, recorded 2026-09-05:
 
-- **Is Finnhub `/stock/earnings` still free on this key?** They paywalled `/stock/candle` and
-  `worker/market/finnhub.ts` carries a comment saying so; the documentation does not settle earnings
-  either way. If it 403s, the numbers come from SEC XBRL company-facts instead — free, authoritative,
-  already in the lineup, and no credential changes.
-- **Does GDELT answer from a Worker?** It rate-limits by IP and refused a shared cloud egress during
-  research. From Cloudflare's edge with a declared `User-Agent` it should be fine, but it is
-  unverified. If it proves unreliable, Hacker News and the two wire sources still fill the panel —
-  which is the partial-failure design doing exactly its job.
+- **Finnhub `/stock/earnings` works on the existing key:** HTTP 200 and four TSLA quarters.
+  The numeric grid uses it, with SEC reported quarterly EPS as the fallback. SEC supplies no
+  consensus estimates, so those cells stay empty and the panel labels the source.
+- **GDELT returned 429 from local Wrangler workerd.** Live integration also encountered its
+  timeout. Wire sources and Hacker News continued, with GDELT explicitly missing. Deployed
+  Cloudflare egress still needs verification.
+- **SEC without a User-Agent returned 403.** A reachable `SEC_CONTACT` and the identified
+  comparison request remain pending. The adapter rejects the existing placeholder locally.
+
+The live check also found that Finnhub article links can differ only by `?id=…`. That semantic
+identifier survives deduplication; tracking parameters still do not. Recognized paywalled
+publishers behind those Finnhub links get the same dim marker as their direct domains.
+Finnhub crypto category results are keyword-filtered and labelled WEB, since they are not
+ticker-exact. Full results and remaining verification are in
+[`PLANNING/PHASE-10-RESEARCH.md`](../PLANNING/PHASE-10-RESEARCH.md).
 
 ---
 
@@ -487,11 +498,13 @@ src/routes/{Login,Dashboard,Trade,Leaderboard,Sectors,Admin}.tsx
     `User-Agent`, to confirm the 403. Write down what they actually said.
 16. `npm run build` and `npm test` — both clean. Phase 10 introduces no secret, so there is no new
     leak-guard case to add; the existing ones must still pass.
-17. Press **F4**, type `TSLA`. Expect headlines from **four or more distinct domains spanning both
-    tiers** — a wire name and a tech or general name — four earnings quarters, recent filings on the
+17. Press **F4**, type `TSLA`. Inspect directly relevant headlines across both tiers; aim for four
+    publisher domains when coverage permits, without padding the list — four earnings quarters, recent filings on the
     second tab, and a discussion list from Hacker News. The panel meta names the sources that
     answered.
-18. Toggle `ALL · WIRE · WEB`: WIRE is ticker-exact, WEB is name-matched, and the counts change.
+18. Toggle `ALL · WIRE · WEB`: WIRE is ticker-queried, WEB is keyword-queried, and the counts change.
+    Every visible headline and discussion title must identify Tesla or TSLA. Amazon-only stories
+    must stay absent after a repeat lookup, even if a provider tags them TSLA.
 19. Type `BTC/USD` — the selector flips to CRYPTO, the earnings/filings panel is gone, headlines
     still populate, and EDGAR is never called.
 20. Click through from an option position on F1: the field shows `AAPL 16JAN26 150C` and the screen

@@ -1,5 +1,29 @@
 # Deploying to Cloudflare
 
+## Phase 10 — Research
+
+Research adds no migration, secret, namespace or cron. The last migration is
+still `0007_stop_orders.sql`, applied and verified on 2026-09-02 as recorded in
+`PLANNING/DIRECTIONS.MD`. The existing Alpaca and Finnhub runtime keys are reused.
+
+Before deploying, replace `SEC_CONTACT` in `wrangler.jsonc` with a reachable
+contact. This is a public runtime var, not a `VITE_` build variable and not a
+secret. The SEC adapter refuses the placeholder and the Research screen reports
+SEC as unavailable while the other feeds continue.
+
+Preflight on 2026-09-05: Finnhub earnings returned 200 and four TSLA quarters.
+GDELT returned 429 from local Wrangler workerd; SEC's ticker list returned 403
+without a User-Agent. These local probes do not verify Cloudflare's deployed
+egress or SEC access with a real contact. Details and remaining checks are in
+[`PLANNING/PHASE-10-RESEARCH.md`](./PLANNING/PHASE-10-RESEARCH.md).
+
+After deployment, open F4 on TSLA, check both headline tiers and the source
+status, switch between earnings and filings, then research BTC/USD and an option
+contract. Confirm that repeated reads use the shared cache, one unavailable
+source leaves the others visible, Amazon-only stories never appear in TSLA
+headlines or discussion (including repeat reads), and the screen fits at 390px. The complete
+walk-through is `docs/PLAN.md`, Verification items 15–23.
+
 ## Migrations: all five are applied
 
 `0001` through `0005` are in the FinanceClub project (ref `vtlqkgpcfdhslqahivzf`)

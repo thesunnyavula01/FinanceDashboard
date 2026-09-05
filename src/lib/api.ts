@@ -176,6 +176,66 @@ export interface ChainResponse {
   contracts: ChainContract[];
 }
 
+export type ResearchSource = "alpaca" | "finnhub" | "gdelt" | "edgar" | "hackernews";
+export type NewsTier = "WIRE" | "WEB";
+
+export interface NewsItem {
+  id?: string;
+  headline: string;
+  summary: string | null;
+  url: string;
+  /** Publisher, which is distinct from the service that supplied the story. */
+  source: string;
+  provider: "alpaca" | "finnhub" | "gdelt";
+  tier: NewsTier;
+  publishedAt: string;
+  paywalled: boolean;
+}
+
+export interface EarningsQuarter {
+  period: string;
+  quarter: number | null;
+  year: number | null;
+  estimate: number | null;
+  actual: number | null;
+  surprisePercent: number | null;
+  source: "finnhub" | "edgar";
+}
+
+export interface Filing {
+  id?: string;
+  form: string;
+  title: string;
+  filedAt: string;
+  url: string;
+}
+
+export interface DiscussionPost {
+  id: string;
+  title: string;
+  url: string;
+  commentsUrl: string;
+  score: number | null;
+  comments: number | null;
+  publishedAt: string;
+}
+
+export interface ResearchResponse {
+  /** An option resolves to its underlying before any provider is called. */
+  symbol: string;
+  assetClass: "EQUITY" | "CRYPTO";
+  name: string | null;
+  headlines: NewsItem[];
+  earnings: EarningsQuarter[];
+  filings: Filing[];
+  discussion: DiscussionPost[];
+  sources: ResearchSource[];
+  missing: ResearchSource[];
+  /** A provider can answer news while its earnings endpoint is unavailable. */
+  sectionMissing: Record<"headlines" | "earnings" | "filings" | "discussion", ResearchSource[]>;
+  asOf: string;
+}
+
 export interface SymbolMatch {
   symbol: string;
   name: string;
@@ -702,6 +762,9 @@ export const api = {
   me: () => request<MeResponse>("/auth/me", { authed: true }),
 
   portfolio: () => request<PortfolioResponse>("/portfolio", { authed: true }),
+
+  research: (symbol: string) =>
+    request<ResearchResponse>(`/research?symbol=${encodeURIComponent(symbol)}`, { authed: true }),
 
   /** The equity curve, already indexed and aligned against SPY, QQQ and the club. */
   history: (range: CurveRange) =>

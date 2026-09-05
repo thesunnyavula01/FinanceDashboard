@@ -101,7 +101,11 @@ export async function getSecurities(
 
   const unknown: string[] = [];
   for (const symbol of missing) {
-    const record = stored.get(symbol);
+    // Another reader may finish enrichment while this database read awaits.
+    // Recheck memory before starting work, or the asset card and Research can
+    // spend two profile calls on the same cold company a few milliseconds apart.
+    const hot = memory.get(symbol);
+    const record = stored.get(symbol) ?? (hot && now - hot.loadedAt < MEMORY_TTL_MS ? hot.record : undefined);
     if (record) {
       memory.set(symbol, { record, loadedAt: now });
       securities.set(symbol, record);
@@ -115,9 +119,18 @@ export async function getSecurities(
   const toEnrich = unknown.slice(0, MAX_ENRICH_PER_REQUEST);
   const work = enrich(env, toEnrich);
   if (waitUntil) waitUntil(work);
-  else await work.catch(() => undefined);
+  else {
+    await work.catch(() => undefined);
+    // Research needs the resolved company name before starting keyword feeds.
+    // A caller who waits should receive the records it just waited for; asking
+    // again would start another profile call when the first lookup failed.
+    for (const symbol of unknown) {
+      const enriched = memory.get(symbol);
+      if (enriched) securities.set(symbol, enriched.record);
+    }
+  }
 
-  return { securities, pending: unknown };
+  return { securities, pending: unknown.filter((symbol) => !securities.has(symbol)) };
 }
 
 /**
@@ -326,4 +339,10 @@ async function store(env: Env, record: SecurityRecord): Promise<void> {
   );
 
   if (error) console.error(`Could not persist ${record.symbol}:`, error);
+}
+
+/** Drops the isolate profile cache and enrichment guards. Tests only. */
+export function forgetSecurities(): void {
+  memory.clear();
+  enriching.clear();
 }

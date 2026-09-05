@@ -13,14 +13,15 @@ export const SCREENS: Screen[] = [
   { key: "F1", label: "Positions", path: "/" },
   { key: "F2", label: "Trade", path: "/trade" },
   { key: "F3", label: "Leaderboard", path: "/leaderboard" },
-  { key: "F4", label: "Sectors", path: "/sectors" },
-  { key: "F5", label: "Admin", path: "/admin", admin: true },
+  { key: "F4", label: "Research", path: "/research" },
+  { key: "F5", label: "Sectors", path: "/sectors" },
+  { key: "F6", label: "Admin", path: "/admin", admin: true },
 ];
 
 /**
  * The screens this member can actually use.
  *
- * F5 is not merely disabled for a member — an officer-only screen that is
+ * F6 is not merely disabled for a member — an officer-only screen that is
  * visible and refuses is a worse answer than one that is not offered. The
  * route still exists and the API still checks, because hiding a link is not a
  * permission.
@@ -32,7 +33,7 @@ export function screensFor(isAdmin: boolean): Screen[] {
 /**
  * Function-key navigation.
  *
- * The keys are real: F1–F5 switch screens. Browsers bind some of these by
+ * The keys are real: F1–F6 switch screens. Browsers bind some of these by
  * default (F1 help, F3 find, F5 reload), so we take them over — which is the
  * point of emulating a dedicated instrument, and every screen is still one
  * click away for anyone who would rather not. Bindings are suppressed while a
@@ -109,7 +110,7 @@ export function FunctionNav({ isAdmin = false }: { isAdmin?: boolean }) {
       ))}
 
       {/*
-        Not a screen, and deliberately not a sixth key: F6 would rank a legal
+        Not a screen, and deliberately not a seventh key: F7 would rank a legal
         document alongside the trade ticket, and the member who wants it is
         never looking for it in a hurry. It rides the empty end of a row that
         already exists, so it costs no height — a keycap would have claimed it

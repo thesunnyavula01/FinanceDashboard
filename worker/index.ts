@@ -8,6 +8,7 @@ import { orders } from "./routes/orders.ts";
 import { portfolio } from "./routes/portfolio.ts";
 import { leaderboard } from "./routes/leaderboard.ts";
 import { admin } from "./routes/admin.ts";
+import { research } from "./routes/research.ts";
 import { syncUniverse } from "./market/universe.ts";
 import { sweepRestingOrders } from "./orders/sweep.ts";
 import { snapshotSeason } from "./analytics/snapshot.ts";
@@ -38,6 +39,7 @@ app.route("/api/portfolio", portfolio);
 app.route("/api/orders", orders);
 app.route("/api/leaderboard", leaderboard);
 app.route("/api/admin", admin);
+app.route("/api/research", research);
 
 // Unknown API paths must answer with JSON. Without this they would fall through
 // to the SPA shell and the client would try to parse HTML as JSON.

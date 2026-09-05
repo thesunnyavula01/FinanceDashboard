@@ -166,7 +166,7 @@ The uncrossed-two-sided-book guard is kept and matters more here than anywhere,
 because a chain quotes one side all day on the wings. F2's chain panel states the
 feed once, the same habit as the curve naming whether it was replayed or stored.
 
-### Finnhub - sector classification only (free tier, 60 req/min)
+### Finnhub - profiles and research (free tier, 60 req/min)
 
 - `GET finnhub.io/api/v1/stock/profile2?symbol=X` - name, `finnhubIndustry`, logo.
   Called **once per ticker ever**, then persisted to the `securities` table
@@ -176,7 +176,7 @@ feed once, the same habit as the curve naming whether it was replayed or stored.
 
 ### Research: six sources, none of which needs a signup (Phase 10)
 
-**Planned, not built.** F4 answers a question about the asset rather than the
+**Implemented in Phase 10.** F4 answers a question about the asset rather than the
 portfolio, and that needs breadth of publisher rather than freshness of tick —
 the opposite requirement to a price.
 
@@ -196,9 +196,9 @@ What is left is broader than what was lost, and **none of it needs an account**:
   equities**, which is what makes the collapse of the crypto vendors survivable.
 - **Finnhub** `company-news` and `news?category=crypto` - a different publisher
   mix on the key already in use: Reuters, CNBC, MarketWatch, Yahoo, Seeking
-  Alpha. Plus `stock/earnings` for actual-vs-estimate. **Verify that one against
-  the live key first**: `stock/candle` went premium and the docs do not settle
-  earnings. SEC XBRL is the fallback and costs no credential.
+  Alpha. Plus `stock/earnings` for actual-vs-estimate, **verified on the live key
+  2026-09-05: HTTP 200 and four TSLA quarters**. SEC XBRL is the fallback and
+  costs no credential; it supplies reported quarterly EPS without estimates.
 - **GDELT DOC 2.0** - no key, no account, ever. Indexes 100,000+ outlets
   worldwide, which is where TechCrunch, The Verge, Ars Technica and the trade
   and local press come from.
@@ -220,6 +220,27 @@ Gap the retailer, so `ALL · WIRE · WEB` is on screen and a ticker-exact row
 never looks identical to a name-matched one. Same habit as the curve naming
 whether it was replayed or stored.
 
+**Provider tags are candidates, not relevance evidence.** Finnhub returned an
+Amazon-only article tagged `TSLA` during verification. Both headline tiers and
+discussion titles now require a direct company-name or ticker match in the
+visible title. Summaries, URLs, CEO/product aliases and provider tags alone do
+not qualify. Common-word tickers require explicit stock notation or a resolved
+company name, and ambiguous names need context. Filtering runs after every
+cache read, so old cached candidates obey the same rule. Fewer relevant rows
+are preferable to filling the panel with loosely related stories.
+
+Finnhub's crypto endpoint is category-wide rather than ticker-exact. Its rows
+are filtered by the coin's name/ticker and labelled **WEB**; Alpaca's symbol
+query remains WIRE. Common pair names resolve to Bitcoin, Ethereum and other
+asset names before a keyword request.
+
+**An article ID is not a tracker.** Finnhub company-news links can all share
+`finnhub.io/api/news` and differ only by `?id=…`. Deduplication keeps that ID;
+otherwise forty distinct stories collapse into one. Other URLs dedupe by
+host and path, keeping the earliest publication time. Known paywalled domains
+and recognized publishers behind Finnhub redirects carry a dim marker and lose
+timestamp ties; articles are never fetched individually to resolve redirects.
+
 **Five upstreams sit behind one `/api/research` call**, cached 5-15 minutes in
 the same two tiers as the chain. A hundred members reading TSLA cost one round
 of five requests, not five hundred. The binding ceiling is Finnhub's 60/min, shared
@@ -230,6 +251,20 @@ source and a `sources` / `missing` pair in the payload, so a thin feed says
 whether that is the news or the plumbing. `describeMarketError` runs only when
 every source failed. With five upstreams this matters far more than with two:
 the screen must not go dark because GDELT rate-limited us.
+
+That failure was observed in the preflight: GDELT returned 429 from local
+Wrangler workerd, while the SEC ticker list returned 403 without a User-Agent.
+The real `SEC_CONTACT`, identified SEC probe, deployed egress check and browser
+walk-through remain deployment work. The adapter refuses the placeholder and
+names SEC as missing until configured. Results live in
+`PLANNING/PHASE-10-RESEARCH.md`.
+
+Fragments cache independently: news five minutes, web fifteen, discussion ten,
+filings six hours and earnings twelve. Empty successful responses last at least
+thirty minutes, failed fragments back off for one minute, and a source that
+partly succeeds can appear in both `sources` and `missing`. `sectionMissing`
+keeps each panel's explanation precise. Cold readers also share profile
+resolution, so the web feeds get the company name on the first request.
 
 **Summaries are text, never HTML.** There is no sanitizer in this repo and no
 `dangerouslySetInnerHTML` anywhere; a news summary would be the first untrusted
@@ -1160,8 +1195,8 @@ reads it, so the panel hugs a 68-character measure and the body is 13px on 1.7.
 The privacy document answers in two grids — what is held about you and who else
 touches it — because those are the only two questions anyone opens a privacy
 policy with, and this app answers everything else in a grid already. Keep them
-true: they name `profiles`, `pending_orders`, and the four processors by hand,
-so a new table or a fifth service means editing that screen too.
+true: they name `profiles`, `pending_orders`, and the service providers by hand,
+so a new table or service means editing that screen too.
 
 **F2 gains exactly one control and no height.** `EQUITY · OPTION · CRYPTO` rides
 the existing Ticker label row, so a member who never touches it sees the screen
@@ -1463,14 +1498,16 @@ step 6. Build and deploy are unaffected.
       2026-09-02.
 - [x] **Phase 8 (deploy)** - `0006_derivatives.sql` applied and verified
       2026-09-02.
-- [ ] **Phase 10 (code)** - Research on F4: news, earnings, filings and
+- [x] **Phase 10 (code)** - Research on F4: news, earnings, filings and
       discussion for any ticker, across six sources. **Adds no migration and no
       credential** - nothing is persisted, so there is no `0008_*.sql` to look
       for, and every source is either a key already in use or an open endpoint.
       The only setup is `SEC_CONTACT` in `wrangler.jsonc`, which is a var and
-      not a secret. Two things to `curl` before writing a panel: whether
-      Finnhub's `stock/earnings` is free on this key, and whether GDELT answers
-      from a Worker.
+      not a secret. Build, 335 tests and Research render smoke checks pass.
+- [ ] **Phase 10 (deploy)** - set a reachable `SEC_CONTACT`, verify SEC access
+      with it, deploy, and walk `docs/PLAN.md` verification items 15–23.
+      Finnhub earnings passed the live-key probe; GDELT returned 429 from local
+      workerd. Browser visual verification and deployed egress remain unchecked.
 
 ## Reference docs
 

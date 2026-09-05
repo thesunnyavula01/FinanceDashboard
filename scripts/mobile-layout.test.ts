@@ -39,6 +39,8 @@ const read = (path: string) => readFileSync(join(root, path), "utf8");
 const STACKING_GRIDS: Array<[file: string, marker: string]> = [
   ["src/routes/Positions.tsx", "md:grid-rows-"],
   ["src/routes/Trade.tsx", "lg:grid-cols-"],
+  ["src/routes/Research.tsx", "xl:grid-cols-"],
+  ["src/routes/Research.tsx", "xl:grid-rows-"],
   ["src/routes/Sectors.tsx", "xl:grid-rows-"],
   ["src/routes/Sectors.tsx", "xl:grid-cols-[1fr_minmax(17rem,20rem)]"],
   ["src/routes/Sectors.tsx", "xl:grid-cols-[1fr_minmax(22rem,28rem)]"],

@@ -1,4 +1,4 @@
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { formatContract } from "@/lib/symbols";
 import { Panel } from "@/components/terminal/Panel";
 import { DataGrid, type Column } from "@/components/terminal/DataGrid";
@@ -77,7 +77,7 @@ export function Positions() {
     {
       // The two context columns. A member reading their own book on a phone
       // knows what NVDA is and what sector it is in; what they came for is the
-      // last price and the P/L. F4 is where the sector question gets asked
+      // last price and the P/L. F5 is where the sector question gets asked
       // properly anyway, on a screen built for it.
       key: "name",
       header: "Name",
@@ -187,6 +187,21 @@ export function Positions() {
         <Value value={r.weight} dim>
           {weight(r.weight)}
         </Value>
+      ),
+    },
+    {
+      key: "research",
+      header: "",
+      width: "5rem",
+      render: (r) => (
+        <Link
+          to={`/research?symbol=${encodeURIComponent(r.symbol)}`}
+          onClick={(event) => event.stopPropagation()}
+          aria-label={`Research ${formatContract(r.symbol)}`}
+          className="label whitespace-nowrap text-ink-faint hover:text-accent"
+        >
+          Research
+        </Link>
       ),
     },
   ];

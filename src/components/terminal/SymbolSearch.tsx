@@ -4,6 +4,8 @@ import { api, type SymbolMatch } from "@/lib/api";
 import type { AssetClass } from "@/lib/symbols";
 
 interface SymbolSearchProps {
+  /** Each screen labels its own field; F2 keeps its established id. */
+  id?: string;
   value: string;
   onChange: (symbol: string) => void;
   /** Fired when a symbol is committed — picked from the list or typed and entered. */
@@ -33,6 +35,7 @@ interface SymbolSearchProps {
  * typed, Escape closes the list without clearing the field.
  */
 export function SymbolSearch({
+  id = "order-symbol",
   value,
   onChange,
   onCommit,
@@ -122,7 +125,7 @@ export function SymbolSearch({
   return (
     <div ref={wrapper} className="relative">
       <input
-        id="order-symbol"
+        id={id}
         value={value}
         onChange={(event) => {
           onChange(event.target.value.toUpperCase());

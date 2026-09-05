@@ -180,6 +180,62 @@ export interface ProfileProvider {
   profile(symbol: string): Promise<SecurityProfile | null>;
 }
 
+export type ResearchSource = "alpaca" | "finnhub" | "gdelt" | "edgar" | "hackernews";
+
+export interface NewsQuery {
+  start?: string;
+  end?: string;
+  limit?: number;
+}
+
+export interface NewsItem {
+  id?: string;
+  headline: string;
+  summary: string | null;
+  url: string;
+  /** Publisher, which can differ from the API returning the story. */
+  source: string;
+  provider: "alpaca" | "finnhub" | "gdelt";
+  /** WIRE is ticker matched; WEB is a keyword match (including crypto category news). */
+  tier: "WIRE" | "WEB";
+  publishedAt: string;
+  paywalled: boolean;
+}
+
+export interface EarningsQuarter {
+  period: string;
+  quarter: number | null;
+  year: number | null;
+  estimate: number | null;
+  actual: number | null;
+  surprisePercent: number | null;
+  source: "finnhub" | "edgar";
+}
+
+export interface Filing {
+  id?: string;
+  form: string;
+  title: string;
+  filedAt: string;
+  url: string;
+}
+
+export interface DiscussionPost {
+  id: string;
+  title: string;
+  url: string;
+  commentsUrl: string;
+  score: number | null;
+  comments: number | null;
+  publishedAt: string;
+}
+
+/** News providers share the output; a query is a ticker, batched tickers, or a company name. */
+export interface NewsProvider<Query = string> {
+  readonly name: string;
+  news(query: Query, opts?: NewsQuery): Promise<NewsItem[]>;
+}
+
 /** An upstream provider answered with an error, or did not answer at all. */
 export class MarketDataError extends Error {
   status: number;

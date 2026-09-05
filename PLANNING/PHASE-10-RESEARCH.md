@@ -4,8 +4,9 @@ The build sheet. The *why* is in [`DIRECTIONS.MD`](./DIRECTIONS.MD) under
 "Research: six sources" and in [`docs/PLAN.md`](../docs/PLAN.md) under
 "Phase 10"; this file is the order of work.
 
-**Status: planned, not built.** No feature code has been written, and none of
-it needs a credential you do not already have.
+**Status: code implemented and verified, 2026-09-05.** No new credential or
+migration is needed. Deployment is pending a real SEC contact and the live
+browser/Cloudflare checks below.
 
 ---
 
@@ -14,19 +15,32 @@ it needs a credential you do not already have.
 Two questions the documentation does not settle. Answer them with `curl` and
 write the answers down here — the same habit that made Phase 8 worth reading.
 
-- [ ] **Is Finnhub `stock/earnings` free on this key?** They paywalled
+- [x] **Is Finnhub `stock/earnings` free on this key?** Verified 2026-09-05:
+      `stock/earnings?symbol=TSLA` returned HTTP 200 with four quarters and
+      `estimate`, `actual`, `period`, `surprise`, `surprisePercent`, `year` and
+      `quarter`. No additional subscription was needed. They paywalled
       `stock/candle` and `worker/market/finnhub.ts` carries a comment saying so.
       Free → the EARNINGS panel is a numeric grid. 403 → the numbers come from
       SEC XBRL company-facts instead, which is free, authoritative, already in
       the lineup, and changes no credential.
-- [ ] **Does GDELT answer from a Worker?** It rate-limits by IP and refused a
+- [x] **Does GDELT answer from a Worker?** Verified 2026-09-05 using
+      `wrangler dev --local` and its workerd `fetch`: HTTP 429, with a
+      plain-text request to allow five seconds between calls. The adapter must
+      treat this as an unavailable source and retain the other feeds. This
+      verifies the Worker runtime on local egress; deployed Cloudflare egress
+      still needs the post-deploy check. It rate-limits by IP and refused a
       shared cloud egress during research. Test from `wrangler dev`, not a
       laptop. Unreliable → Hacker News and the two wire sources still fill the
       panel, which is the partial-failure design doing its job.
-- [ ] **Confirm EDGAR 403s without a `User-Agent`**, so the requirement is real
-      and not folklore, and set `SEC_CONTACT` in `wrangler.jsonc` to a real
-      address before anything ships. This is the **only** setup step the phase
-      has.
+- [x] **Probe EDGAR without a `User-Agent`.** On 2026-09-05,
+      `www.sec.gov/files/company_tickers.json` from the local workerd probe
+      returned HTTP 403, "Request Rate Threshold Exceeded". That confirms this
+      request was refused; the response alone does not prove which check
+      caused the refusal.
+- [ ] Set `SEC_CONTACT` in `wrangler.jsonc` to a real reachable address and
+      repeat the identified request before shipping. The existing placeholder
+      is rejected by the adapter, so SEC is reported missing until configured.
+      This remains the **only** setup step the phase has.
 
 ---
 
@@ -117,7 +131,16 @@ providers a request on every visit for the rest of the season.
 `Promise.allSettled` across every source. A rejection is `console.error`'d;
 `describeMarketError` runs **only when every source failed**. Dedupe by URL
 host+path, keeping the earliest `publishedAt` — the same wire story arrives from
-three of them.
+three of them. **One live-feed exception:** Finnhub's company-news links can
+all be `finnhub.io/api/news?id=…`. That `id` is the article identity, not a
+tracking parameter, and must survive deduplication. The first integration check
+collapsed forty different Finnhub stories into one without it; a regression
+test now pins the distinction.
+
+Finnhub's crypto endpoint is category-wide. Those rows are filtered by coin
+name/ticker and labelled **WEB**, since a keyword match must not claim the
+ticker precision of Alpaca's crypto wire. Common crypto ticker aliases resolve
+to names such as Bitcoin for GDELT and Hacker News too.
 
 ---
 
@@ -199,25 +222,63 @@ comment naming the class of bug the file defends against, ending
 `* Run with: npm test`.
 
 `worker/market/research.test.ts`
-- [ ] one story arriving from three providers merges to one row, earliest kept
-- [ ] N readers inside the TTL cost one round of upstream calls
-- [ ] **one dead provider degrades to the rest and `missing` names it**
-- [ ] every provider dead throws, so the route can still answer 502
-- [ ] an empty result is negative-cached and does not re-poll
-- [ ] an OCC symbol researches its underlying
-- [ ] `BTC/USD` takes the crypto path and asks neither EDGAR nor Finnhub earnings
-- [ ] a summary containing markup comes back as text
-- [ ] wire and web results stay tagged with their tier through the merge
+- [x] one story arriving from three providers merges to one row, earliest kept
+- [x] N readers inside the TTL cost one round of upstream calls
+- [x] **one dead provider degrades to the rest and `missing` names it**
+- [x] every provider dead throws, so the route can still answer 502
+- [x] an empty result is negative-cached and does not re-poll
+- [x] an OCC symbol researches its underlying
+- [x] `BTC/USD` takes the crypto path and asks neither EDGAR nor Finnhub earnings
+- [x] a summary containing markup comes back as text
+- [x] wire and web results stay tagged with their tier through the merge
 
 `worker/market/edgar.test.ts`
-- [ ] every request carries a `User-Agent`
-- [ ] ticker→CIK is looked up once and cached
+- [x] every request carries a `User-Agent`
+- [x] ticker→CIK is looked up once and cached
 
 `worker/market/hackernews.test.ts`
-- [ ] the query sorts by date with a recency filter, not by relevance
+- [x] the query sorts by date with a recency filter, not by relevance
 
 `scripts/mobile-layout.test.ts`
-- [ ] `Research.tsx`'s stacking grid carries `grid-cols-1`
+- [x] `Research.tsx`'s stacking grid carries `grid-cols-1`
+
+Additional regressions cover the profile-enrichment race, independent fragment
+TTLs, malformed/throwing edge caches, failed-source retry caches, authenticated
+route validation, Finnhub redirect identities and paywall markers, unsafe URLs,
+and SEC annual/YTD figures being excluded from quarterly EPS.
+
+`worker/market/research-relevance.test.ts` covers direct company/ticker matching,
+word boundaries, short and common-word tickers, markup, literal punctuation,
+crypto names and fork exclusions. The aggregation regression seeds a warm cache
+with Amazon-only articles tagged TSLA and confirms they disappear without an
+upstream request. The same rule applies to discussion titles. Provider tags,
+summaries and URLs alone cannot establish relevance; matching happens before
+the merge and on every cache read. The browser query key is versioned to discard
+unfiltered results retained during development.
+
+### Verification results
+
+- `npm test`: **335 passing**, including the pre-existing trading, valuation,
+  auth, migration and build-guard tests.
+- `npm run build`: passes. The existing large-client-chunk advisory remains;
+  this phase adds no dependency and the chart stays in its separate chunk.
+- A scan of the generated client JavaScript, source maps and HTML found no
+  configured Worker secret values.
+- Local React render smoke checks passed for equity, crypto, OCC underlyings,
+  SEC actual-only EPS, complete research failure, mobile columns/discussion
+  links, plain text, external-link attributes and tied paywall ordering.
+- Live adapter integration after relevance filtering: TSLA returned **50 headlines, four earnings
+  quarters and 18 discussion posts**. A second read made **zero upstream
+  requests**. GDELT timed out and SEC was correctly missing while its contact
+  remained a placeholder.
+- BTC/USD returned **53 headlines across four link domains and both tiers**,
+  plus three discussion posts. It made no SEC or earnings requests.
+- Finnhub company-news URLs are redirect links, so counting their link host
+  as a publisher understates breadth. TSLA's WEB coverage still needs the live
+  GDELT check; it is not claimed as verified here.
+- Browser screenshot/interaction checks, including actual 390px geometry,
+  were unavailable in this session. The mobile layout guards and render checks
+  passed; the browser walk-through remains in the deployment checklist.
 
 ---
 
@@ -235,8 +296,9 @@ the layout tree, the nav line, the F6 renumbering — is **already written**.
 The full walk-through is `docs/PLAN.md` → Verification → Phase 10, items 15–23.
 The two that catch the most:
 
-- **Item 17** — headlines from four or more distinct domains spanning both
-  tiers. Fewer than that and the merge or a provider is silently failing.
+- **Item 17** — inspect relevant headlines across both tiers and the source
+  status. Four publisher domains is a breadth target when coverage permits;
+  relevance filtering must never admit unrelated articles to meet a count.
 - **Item 21** — point `gdelt.ts` at a dead host and restart. HEADLINES falls
   back to the wire sources, `missing` lists `gdelt`, the panel meta says so, and
   every other panel is unaffected. That is the whole partial-failure design,

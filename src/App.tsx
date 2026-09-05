@@ -9,6 +9,7 @@ import { Login } from "@/routes/Login";
 import { Positions } from "@/routes/Positions";
 import { Trade } from "@/routes/Trade";
 import { Leaderboard } from "@/routes/Leaderboard";
+import { Research } from "@/routes/Research";
 import { Sectors } from "@/routes/Sectors";
 import { Admin } from "@/routes/Admin";
 import { Legal } from "@/routes/Legal";
@@ -76,6 +77,7 @@ export function App() {
           <Route path="/" element={<Positions />} />
           <Route path="/trade" element={<Trade />} />
           <Route path="/leaderboard" element={<Leaderboard />} />
+          <Route path="/research" element={<Research />} />
           <Route path="/sectors" element={<Sectors />} />
           <Route path="/admin" element={<Admin />} />
           <Route path="/legal" element={<Legal />} />

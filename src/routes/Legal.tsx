@@ -23,8 +23,8 @@ const DOCS = ["terms", "privacy"] as const;
 type Doc = (typeof DOCS)[number];
 
 /** Bump this whenever a clause below changes. It is the date on the screen. */
-const UPDATED_ISO = "2026-09-03";
-const UPDATED_LABEL = "3 September 2026";
+const UPDATED_ISO = "2026-09-05";
+const UPDATED_LABEL = "5 September 2026";
 
 /**
  * Who to ask. The club runs no support inbox, so this is deliberately a person
@@ -283,8 +283,11 @@ function Privacy() {
               "Hosting and the server",
               "Ordinary web request logs: IP address, time, path",
             ],
-            ["Alpaca", "Market data", "Ticker symbols. Never a member, never a portfolio"],
-            ["Finnhub", "A company's sector", "One ticker symbol, once ever, then stored here"],
+            ["Alpaca", "Prices and news", "Ticker symbols. Never a member, never a portfolio"],
+            ["Finnhub", "Company profiles, news and earnings", "Ticker symbols or the crypto news category"],
+            ["GDELT", "Web headlines", "A company or asset name"],
+            ["SEC EDGAR", "Filings and reported earnings", "A ticker or company identifier, and the club's public contact"],
+            ["Hacker News / Algolia", "Community discussion", "A company or asset name"],
           ]}
         />
         <p>
@@ -293,8 +296,9 @@ function Privacy() {
           the terminal makes no request to anyone outside this table.
         </p>
         <p>
-          Market data is fetched for the whole club at once, in batches, so there is nothing in
-          those requests that says which member asked or what anybody holds.
+          Prices are fetched in batches and research results are cached across the club. These
+          server requests contain no member identity or portfolio. Opening an article, filing
+          or discussion link visits that publisher's site, which has its own privacy practices.
         </p>
       </Clause>
 
@@ -347,7 +351,7 @@ function Privacy() {
       <Clause n={8} title="If you are under 18">
         <p>
           Nothing above changes and nothing extra is collected. No member's data is sold, used
-          for advertising, or shared beyond the four services listed. A parent, guardian or the
+          for advertising, or shared beyond the services listed. A parent, guardian or the
           faculty advisor can ask an officer what is held about a member and have it deleted.
         </p>
       </Clause>

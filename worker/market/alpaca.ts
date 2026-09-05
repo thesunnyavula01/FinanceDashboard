@@ -12,7 +12,11 @@ import {
   type Quote,
   type SessionState,
   type TradableAsset,
+  type NewsItem,
+  type NewsProvider,
+  type NewsQuery,
 } from "./provider.ts";
+import { normalizeNews, researchJson, researchWindow } from "./research-utils.ts";
 
 /**
  * Alpaca — every price in this app.
@@ -233,7 +237,7 @@ export function quoteFromSnapshot(
   };
 }
 
-export class AlpacaProvider implements PriceProvider {
+export class AlpacaProvider implements PriceProvider, NewsProvider<string[]> {
   readonly name = "alpaca";
   #config: AlpacaConfig;
 
@@ -269,6 +273,27 @@ export class AlpacaProvider implements PriceProvider {
     }
 
     return (await response.json()) as T;
+  }
+
+  /** Benzinga wire; crypto pairs use the news API's BTCUSD spelling. */
+  async news(symbols: string[], opts: NewsQuery = {}): Promise<NewsItem[]> {
+    if (symbols.length === 0) return [];
+    const window = researchWindow(opts);
+    const params = new URLSearchParams({
+      symbols: symbols.map((symbol) => symbol.replace("/", "")).join(","),
+      start: window.start, end: window.end, limit: String(window.limit),
+      sort: "desc", include_content: "false", exclude_contentless: "false",
+    });
+    const body = await researchJson<{ news?: Record<string, unknown>[] }>(
+      this.name, `${DATA_HOST}/v1beta1/news?${params}`, this.#headers(),
+    );
+    if (!Array.isArray(body?.news)) throw new MarketDataError(this.name, "Alpaca news returned an invalid response.");
+    return body.news.flatMap((row) => {
+      if (!row || typeof row !== "object") return [];
+      const item = normalizeNews({ ...row, headline: row.headline, publishedAt: row.created_at,
+        provider: "alpaca", tier: "WIRE" });
+      return item ? [item] : [];
+    });
   }
 
   async quotes(symbols: string[]): Promise<Map<string, Quote>> {

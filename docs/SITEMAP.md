@@ -19,7 +19,7 @@ Rendered around every authenticated screen, in `src/App.tsx`:
 
 ```
 StatusRail      app name · market session · connection · display name · role · sign out
-FunctionNav     F1 … F5, the screen switcher, and Legal at the far end
+FunctionNav     F1 … F6, the screen switcher, and Legal at the far end
 <main>          the routed screen
 CommandBar      "/" to focus. A screen name, a ticker, or a whole order
 ```
@@ -77,7 +77,9 @@ Positions grid      symbol, qty, avg cost, price, market value, day P/L, P/L, we
 The curve and the grid answer the two halves of one question — how the season
 has gone, and what is carrying it right now — so they share a screen rather
 than a tab. **Exit:** clicking a position row goes to `/trade` with the ticket
-already on that symbol.
+already on that symbol. The Research link in each position row opens
+`/research?symbol=…`, preserving an option's contract label while researching
+its underlying.
 
 ### F2 `/trade` — Trade
 
@@ -121,8 +123,9 @@ HeadlinesPanel      the merged feed, filtered by ALL · WIRE · WEB
 DiscussionPanel     Hacker News — what the tech community is reading
 ```
 
-**Entrances:** F4, `RESEARCH` in the command bar, and a row click from F1.
-**Exit:** `OPEN ↗` on any row, to the publisher.
+**Entrances:** F4, `RESEARCH` in the command bar, and the Research link on F1.
+`/research?symbol=…` also opens the screen on a stock, crypto pair or contract.
+**Exit:** a headline, filing or discussion link opens its publisher in a new tab.
 **Selection:** the tier filter and the instrument mode are both underlined text,
 not keycaps — they are modes, and the vocabulary is Phase 8's.
 
@@ -268,7 +271,7 @@ the asset store.
 | PATCH | `/api/admin/trades/:id` | officer |
 
 `requireAuth` is mounted on the whole group for quotes, market, portfolio,
-orders and leaderboard; `requireAdmin` sits on the whole admin group and on the
+orders, research and leaderboard; `requireAdmin` sits on the whole admin group and on the
 four officer routes that live outside it.
 
 ---

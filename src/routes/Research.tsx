@@ -37,7 +37,7 @@ function Age({ at }: { at: string }) {
 
 function ExternalLink({ url, children, title }: { url: string; children: ReactNode; title?: string }) {
   return (
-    <a href={url} target="_blank" rel="noreferrer noopener" title={title} className="text-ink hover:text-accent">
+    <a href={url} target="_blank" rel="noreferrer noopener" title={title} className="research-link text-ink hover:text-accent">
       {children}
     </a>
   );
@@ -134,15 +134,19 @@ function ResearchScreen({ initialSymbol }: { initialSymbol: string }) {
   }
 
   const headlineColumns: Column<NewsItem>[] = [
-    { key: "age", header: "Age", width: "3.5rem", sortValue: (item) => Date.parse(item.publishedAt), render: (item) => <Age at={item.publishedAt} /> },
+    { key: "age", header: "Age", width: "3.5rem", hideOnMobile: true, sortValue: (item) => Date.parse(item.publishedAt), render: (item) => <Age at={item.publishedAt} /> },
     { key: "source", header: "Source", width: "8rem", hideOnMobile: true, sortValue: (item) => item.source,
       render: (item) => <span className="text-ink-dim">{item.source}</span> },
     { key: "headline", header: "Headline", render: (item) => (
       <div className="py-1 [overflow-wrap:anywhere]">
         <ExternalLink url={item.url} title={item.summary ?? undefined}>{item.headline}</ExternalLink>
         {item.paywalled && <span className="label ml-1.5 text-ink-faint" title="This publisher may require a subscription">Paywall</span>}
-        {/* The separate tier column goes on a phone; the distinction stays. */}
-        <span className="label ml-1.5 text-ink-faint md:hidden">{item.tier}</span>
+        {/* Keep provenance and recency beside the story when their columns go. */}
+        <div className="mt-1 flex flex-wrap items-baseline gap-x-2 text-ink-dim md:hidden">
+          <span>{item.source}</span>
+          <Age at={item.publishedAt} />
+          <span className="label text-ink-faint">{item.tier}</span>
+        </div>
       </div>
     ) },
     { key: "tier", header: "Tier", width: "4rem", hideOnMobile: true,
@@ -159,8 +163,13 @@ function ResearchScreen({ initialSymbol }: { initialSymbol: string }) {
 
   const filingColumns: Column<Filing>[] = [
     { key: "form", header: "Form", width: "4rem", render: (item) => <span className="num whitespace-nowrap">{item.form}</span> },
-    { key: "date", header: "Filed", width: "6rem", render: (item) => <time dateTime={item.filedAt} className="num whitespace-nowrap text-ink-dim">{item.filedAt.slice(0, 10)}</time> },
-    { key: "filing", header: "Document", render: (item) => <ExternalLink url={item.url}>{item.title}</ExternalLink> },
+    { key: "date", header: "Filed", width: "6rem", hideOnMobile: true, render: (item) => <time dateTime={item.filedAt} className="num whitespace-nowrap text-ink-dim">{item.filedAt.slice(0, 10)}</time> },
+    { key: "filing", header: "Document", render: (item) => (
+      <div className="py-1 [overflow-wrap:anywhere] md:py-0">
+        <ExternalLink url={item.url}>{item.title}</ExternalLink>
+        <time dateTime={item.filedAt} className="num block text-ink-dim md:hidden">{item.filedAt.slice(0, 10)}</time>
+      </div>
+    ) },
   ];
 
   const discussionColumns: Column<DiscussionPost>[] = [
@@ -172,11 +181,12 @@ function ResearchScreen({ initialSymbol }: { initialSymbol: string }) {
         <ExternalLink url={item.url}>{item.title}</ExternalLink>
         {/* Comments lose their column on a phone, but the discussion must
             remain reachable when the title leads to the original article. */}
-        <span className="ml-1.5 md:hidden">
+        <div className="flex flex-wrap items-center gap-x-3 md:hidden">
+          <Age at={item.publishedAt} />
           <ExternalLink url={item.commentsUrl} title={`Read the discussion of ${item.title}`}>
-            <span className="label text-ink-faint">Discuss</span>
+            <span className="label text-ink-dim">Discuss{item.comments === null ? "" : ` · ${shares(item.comments)}`}</span>
           </ExternalLink>
-        </span>
+        </div>
       </div>
     ) },
     { key: "comments", header: "Comments", width: "4.5rem", align: "right", hideOnMobile: true,
@@ -185,7 +195,7 @@ function ResearchScreen({ initialSymbol }: { initialSymbol: string }) {
 
   const secEarnings = research?.earnings.some((item) => item.source === "edgar");
   return (
-    <div className="flex min-h-full flex-col xl:h-full">
+    <div className="research-screen flex min-h-full min-w-0 flex-col xl:h-full">
       <div className="shrink-0 border-b border-line px-2.5 py-2">
         <form className="max-w-lg" onSubmit={(event) => { event.preventDefault(); commit(); }}>
           <div className="mb-1 flex items-baseline justify-between gap-2">
@@ -196,7 +206,7 @@ function ResearchScreen({ initialSymbol }: { initialSymbol: string }) {
                 return (
                   <button key={candidate} type="button" role="radio" aria-checked={selected} tabIndex={selected ? 0 : -1}
                     data-mode={candidate} onClick={() => switchMode(candidate)}
-                    className={`label cursor-pointer border-b pb-0.5 transition-colors ${selected ? "border-accent text-accent" : "border-transparent text-ink-faint hover:text-ink-dim"} disabled:cursor-not-allowed`}>
+                    className={`research-control label cursor-pointer border-b pb-0.5 transition-colors ${selected ? "border-accent text-accent" : "border-transparent text-ink-faint hover:text-ink-dim"} disabled:cursor-not-allowed`}>
                     {candidate}
                   </button>
                 );
@@ -204,13 +214,13 @@ function ResearchScreen({ initialSymbol }: { initialSymbol: string }) {
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <label htmlFor="research-symbol" className="label">Symbol</label>
+            <label htmlFor="research-symbol" className="label sr-only sm:not-sr-only">Symbol</label>
             <div className="min-w-0 flex-1">
               <SymbolSearch id="research-symbol" value={draft === symbol ? formatContract(draft) : draft}
                 onChange={(next) => { setDraft(next); setInputError(null); }} onCommit={commit}
-                placeholder={mode === "CRYPTO" ? "BTC/USD" : "TSLA"} assetClass={mode} />
+                placeholder={mode === "CRYPTO" ? "BTC/USD" : "TSLA"} assetClass={mode} showTradingConstraints={false} />
             </div>
-            <button type="submit" className="keycap" aria-label="Load research">GO</button>
+            <button type="submit" className="research-control keycap" aria-label="Load research">GO</button>
           </div>
         </form>
         {inputError && <p role="alert" className="mt-1 text-loss">{inputError}</p>}
@@ -218,7 +228,7 @@ function ResearchScreen({ initialSymbol }: { initialSymbol: string }) {
         {sourceStatus && <p className="mt-1 text-ink-faint" title={sourceStatus}>{sourceStatus}</p>}
         {isError && <p role="status" className="mt-1 text-ink-dim">
           {research ? `Refresh unavailable. Showing research from ${stampET(research.asOf)} ET.` : error instanceof Error ? error.message : "Research unavailable."}
-          <button type="button" onClick={() => void refetch()} disabled={isFetching} className="keycap ml-2">Retry</button>
+          <button type="button" onClick={() => void refetch()} disabled={isFetching} className="research-control keycap ml-2">Retry</button>
         </p>}
       </div>
 

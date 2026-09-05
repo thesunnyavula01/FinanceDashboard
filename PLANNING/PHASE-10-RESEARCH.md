@@ -276,9 +276,17 @@ unfiltered results retained during development.
 - Finnhub company-news URLs are redirect links, so counting their link host
   as a publisher understates breadth. TSLA's WEB coverage still needs the live
   GDELT check; it is not claimed as verified here.
-- Browser screenshot/interaction checks, including actual 390px geometry,
-  were unavailable in this session. The mobile layout guards and render checks
-  passed; the browser walk-through remains in the deployment checklist.
+- Mobile follow-up: headless Edge rendered the real Research and terminal
+  components with local fixtures at **320, 360, 390, 430, 768 and 1440px** for
+  equity, crypto and an OCC option (**18 scenarios**). No page overflow or
+  horizontally clipped controls; long headlines and filing titles stayed in
+  their panels. Phone inputs computed to 16px and research controls to at least
+  44px. Screenshots were reviewed at 320, 390 and 1440px.
+- Browser interaction checks passed for headline filters, report tabs, active
+  navigation visibility, autocomplete touch scrolling without selection, tap
+  selection, mouse selection and Enter. Research suggestions omit trading
+  restrictions while the order ticket retains them. These are local browser
+  checks with fixtures; deployed feed access remains in the checklist.
 
 ---
 

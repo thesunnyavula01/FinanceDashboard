@@ -1290,6 +1290,8 @@ asserts it as text rather than leaving it to a reviewer's eye.
   input's text is smaller than that, and it does not zoom back: tap a quantity
   field, and the buying-power line you were about to read is off-screen. This
   is the one place the app spends height on legibility rather than density.
+  The rule sits outside Tailwind's cascade layers so a `text-lede` utility
+  cannot silently lower a field back to 15px.
 - **`--spacing-row` steps 28px → 36px under a coarse pointer.** One variable,
   so every grid, keycap and nav tab in the app grows together. A 28px row is a
   comfortable line of data and a poor target for a thumb.
@@ -1307,6 +1309,15 @@ asserts it as text rather than leaving it to a reviewer's eye.
   printed on a tab there is decoration standing where the label should be.
   `LEGAL` only floats right from `sm` up, because `ml-auto` in a scroller
   either does nothing or strands the link past the last tab.
+  Opening a screen from another link or resizing the phone brings its active
+  tab into view by scrolling the rail, without moving the page underneath.
+- **Research** keeps each article's source, age and tier under its title on a
+  phone; filings keep their date under the document, and discussion keeps its
+  age and comment link. Header metadata wraps, filters and report tabs have
+  44px touch targets, and article links have a 36px minimum height. The symbol
+  label stays accessible while giving the input more width. Research omits
+  trading restrictions from autocomplete; a swipe scrolls suggestions and a
+  completed tap selects one. Desktop columns and terminal styling stay intact.
 - **The stat strip** becomes a two-column grid whose hairlines are a 1px gap
   over a line-coloured ground, since borders on a wrapping row leave the seams
   between rows unpainted and the ends of them doubled. NAV steps to 22px, and

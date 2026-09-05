@@ -198,7 +198,7 @@ export function Positions() {
           to={`/research?symbol=${encodeURIComponent(r.symbol)}`}
           onClick={(event) => event.stopPropagation()}
           aria-label={`Research ${formatContract(r.symbol)}`}
-          className="label whitespace-nowrap text-ink-faint hover:text-accent"
+          className="label inline-flex min-h-[var(--spacing-row)] items-center whitespace-nowrap text-ink-faint hover:text-accent"
         >
           Research
         </Link>

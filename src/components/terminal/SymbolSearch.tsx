@@ -20,6 +20,8 @@ interface SymbolSearchProps {
    * order ticket — only the command bar means "anything".
    */
   assetClass?: AssetClass;
+  /** Research needs the company name, without order-entry restrictions. */
+  showTradingConstraints?: boolean;
 }
 
 /**
@@ -43,6 +45,7 @@ export function SymbolSearch({
   disabled,
   placeholder = "NVDA",
   assetClass,
+  showTradingConstraints = true,
 }: SymbolSearchProps) {
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
@@ -136,6 +139,9 @@ export function SymbolSearch({
         disabled={disabled}
         autoFocus={autoFocus}
         autoComplete="off"
+        autoCapitalize="characters"
+        autoCorrect="off"
+        enterKeyHint="go"
         spellCheck={false}
         // An OCC contract is twenty-one characters at its longest
         // (GOOGL260116P00150000), so the old ten-character cap would silently
@@ -173,10 +179,11 @@ export function SymbolSearch({
               role="option"
               aria-selected={index === active}
               onPointerDown={(event) => {
-                // Keeps focus in the input so the click does not blur-close first.
-                event.preventDefault();
-                choose(match);
+                // Preserve mouse focus, but let a finger scroll the list.
+                // Choosing on pointerdown commits the first row a swipe hits.
+                if (event.pointerType === "mouse") event.preventDefault();
               }}
+              onClick={() => choose(match)}
               onPointerEnter={() => setActive(index)}
               className={`row flex cursor-pointer items-center gap-2 border-b border-line/60 px-2 last:border-b-0 ${
                 index === active ? "bg-accent-wash" : "hover:bg-panel-hi"
@@ -186,12 +193,12 @@ export function SymbolSearch({
               <span className="truncate text-ink-dim">{match.name}</span>
               {/* Only the constraints that change what a member can do are
                   shown, and only when they bite. */}
-              {!match.fractionable && (
+              {showTradingConstraints && !match.fractionable && (
                 <span className="label ml-auto shrink-0" title="Whole shares only">
                   WHOLE
                 </span>
               )}
-              {!match.shortable && (
+              {showTradingConstraints && !match.shortable && (
                 <span
                   className={`label shrink-0 ${match.fractionable ? "ml-auto" : ""}`}
                   title="Cannot be sold short"

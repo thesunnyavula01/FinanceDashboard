@@ -1,5 +1,5 @@
-import { useEffect, useMemo } from "react";
-import { NavLink, useNavigate } from "react-router-dom";
+import { useEffect, useMemo, useRef } from "react";
+import { NavLink, useLocation, useNavigate } from "react-router-dom";
 
 export interface Screen {
   key: string;
@@ -41,9 +41,30 @@ export function screensFor(isAdmin: boolean): Screen[] {
  */
 export function FunctionNav({ isAdmin = false }: { isAdmin?: boolean }) {
   const navigate = useNavigate();
+  const { pathname } = useLocation();
+  const rail = useRef<HTMLElement>(null);
   // Memoised: it is a keydown-effect dependency, and a fresh array every render
   // would tear down and re-add the window listener on every tick of the clock.
   const screens = useMemo(() => screensFor(isAdmin), [isAdmin]);
+
+  useEffect(() => {
+    const nav = rail.current;
+    if (!nav) return;
+    // A position link can open F4 while its tab is beyond the phone's edge.
+    // Scroll only the rail, leaving the member's place in the page alone.
+    const reveal = () => {
+      const active = nav.querySelector<HTMLElement>('[aria-current="page"]');
+      if (!active) return;
+      const bounds = nav.getBoundingClientRect();
+      const tab = active.getBoundingClientRect();
+      if (tab.left < bounds.left) nav.scrollLeft -= bounds.left - tab.left;
+      else if (tab.right > bounds.right) nav.scrollLeft += tab.right - bounds.right;
+    };
+    reveal();
+    const observer = new ResizeObserver(reveal);
+    observer.observe(nav);
+    return () => observer.disconnect();
+  }, [pathname, screens]);
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
@@ -80,6 +101,7 @@ export function FunctionNav({ isAdmin = false }: { isAdmin?: boolean }) {
   */
   return (
     <nav
+      ref={rail}
       aria-label="Screens"
       className="rail-scroll pad-safe-x flex shrink-0 items-stretch overflow-x-auto border-b border-line bg-canvas"
     >

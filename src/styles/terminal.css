@@ -257,22 +257,6 @@
     overscroll-behavior-y: none;
   }
 
-  /*
-    iOS Safari zooms the page whenever a focused input's text is under 16px,
-    and it does not zoom back out. On an order ticket that is worse than it
-    sounds: the member taps a quantity field, the terminal jumps to 150%, and
-    the buying-power line they were about to read is off-screen. 16px in the
-    fields is the price of never zooming, and it is the one place this app
-    spends height on legibility rather than density.
-  */
-  @media (max-width: 767px) {
-    input,
-    select,
-    textarea {
-      font-size: 16px;
-    }
-  }
-
   /* A 28px row is a comfortable line of data and a poor target for a thumb.
      Under a coarse pointer the grid steps up to 36px — the same layout, one
      size up, which is enough to hit a row without hitting its neighbour. */
@@ -282,6 +266,55 @@
     }
   }
 
+}
+
+/* Outside the cascade layers so text-lede/text-data utilities cannot lower
+   inputs below iOS Safari's 16px zoom threshold. Desktop sizes stay token-led. */
+@media (max-width: 767px) {
+  input,
+  select,
+  textarea {
+    font-size: 16px;
+  }
+
+  .research-screen {
+    overflow-wrap: anywhere;
+  }
+
+  /* Keep the terminal header, but let status text use a second line rather
+     than clipping a filter or the source a member needs to judge an article. */
+  .research-screen section > header {
+    height: auto;
+    min-height: var(--spacing-row);
+    flex-wrap: wrap;
+    row-gap: 0;
+    overflow: visible;
+  }
+
+  .research-screen section > header > .label {
+    max-width: 100%;
+    white-space: normal;
+    overflow: visible;
+  }
+
+  .research-screen section > header > [role="tablist"] {
+    height: auto;
+    max-width: 100%;
+  }
+
+  .research-control,
+  .research-screen section > header button {
+    min-height: 44px;
+    min-width: 44px;
+  }
+
+  .research-link {
+    display: inline-flex;
+    align-items: center;
+    min-height: 36px;
+    max-width: 100%;
+    line-height: 1.5;
+  }
 }
 
 @layer components {

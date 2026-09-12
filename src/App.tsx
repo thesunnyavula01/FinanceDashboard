@@ -58,7 +58,7 @@ export function App() {
   }
 
   return (
-    <div className="flex h-full flex-col bg-canvas">
+    <div key={session.user.id} className="flex h-full flex-col bg-canvas">
       <StatusRail
         appName={health?.app ?? "FINANCE CLUB TERMINAL"}
         session={health?.session.state ?? "CLOSED"}

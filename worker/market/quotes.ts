@@ -1,6 +1,7 @@
 import { providerFromEnv } from "./router.ts";
 import { isTradableSymbol, normalise } from "./symbols.ts";
 import type { PriceProvider, Quote } from "./provider.ts";
+import { MarketDataMap } from "./provider.ts";
 
 /**
  * The shared quote cache.
@@ -52,6 +53,7 @@ interface CacheEntry {
   /** Null means "upstream had no price for this", cached to stop a hot loop. */
   quote: Quote | null;
   cachedAt: number;
+  unavailable?: boolean;
 }
 
 export interface QuoteResult {
@@ -122,7 +124,7 @@ export class QuoteCache {
   }
 
   #ttlFor(entry: CacheEntry): number {
-    return entry.quote === null ? this.#negativeTtlMs : this.#ttlMs;
+    return entry.quote === null && !entry.unavailable ? this.#negativeTtlMs : this.#ttlMs;
   }
 
   #isFresh(entry: CacheEntry): boolean {
@@ -187,7 +189,10 @@ export class QuoteCache {
     const writes: CacheEntry[] = [];
 
     for (const symbol of stillMissing) {
-      const entry: CacheEntry = { quote: fetched.get(symbol) ?? null, cachedAt };
+      const entry: CacheEntry = {
+        quote: fetched.get(symbol) ?? null, cachedAt,
+        ...(fetched.unavailable.has(symbol) ? { unavailable: true } : {}),
+      };
       this.#memory.set(symbol, entry);
       writes.push(entry);
       stats.fetched += 1;
@@ -214,13 +219,13 @@ export class QuoteCache {
    * their own Alpaca batch. They all want the same symbols, so they all wait
    * on whichever batch got there first instead.
    */
-  async #fetch(symbols: string[]): Promise<Map<string, Quote>> {
-    const joined: Array<Promise<Map<string, Quote>>> = [];
+  async #fetch(symbols: string[]): Promise<MarketDataMap<Quote>> {
+    const joined = new Map<Promise<Map<string, Quote>>, string[]>();
     const fresh: string[] = [];
 
     for (const symbol of symbols) {
       const pending = this.#inflight.get(symbol);
-      if (pending) joined.push(pending);
+      if (pending) joined.set(pending, [...(joined.get(pending) ?? []), symbol]);
       else fresh.push(symbol);
     }
 
@@ -232,17 +237,22 @@ export class QuoteCache {
         }
       });
       for (const symbol of fresh) this.#inflight.set(symbol, own);
-      joined.push(own);
+      joined.set(own, fresh);
     }
 
-    const merged = new Map<string, Quote>();
+    const merged = new MarketDataMap<Quote>();
     // allSettled: one failed batch must not blank the symbols another one
     // resolved. A symbol left out simply reads as "no price right now".
-    for (const settled of await Promise.allSettled(joined)) {
+    const jobs = [...joined];
+    for (const [index, settled] of (await Promise.allSettled(jobs.map(([job]) => job))).entries()) {
       if (settled.status === "fulfilled") {
         for (const [symbol, quote] of settled.value) merged.set(symbol, quote);
+        if (settled.value instanceof MarketDataMap) {
+          for (const symbol of settled.value.unavailable) merged.unavailable.add(symbol);
+        }
       } else {
         console.error("Quote fetch failed:", settled.reason);
+        for (const symbol of jobs[index]![1]) merged.unavailable.add(symbol);
       }
     }
     return merged;
@@ -301,7 +311,7 @@ export function quoteCache(env: QuoteEnv): QuoteCache {
     provider: providerFromEnv(env),
     ttlSeconds,
     cache: typeof caches === "undefined" ? null : caches.default,
-    namespace: `v1/${feed}`,
+    namespace: `v2/${feed}`,
   });
 
   shared = { key, cache };

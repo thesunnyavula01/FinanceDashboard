@@ -64,7 +64,7 @@ orders.use("*", requireAuth);
 const MAX_NOTIONAL = 10_000_000;
 
 /** Below this a price cannot survive rounding to 6dp as an average cost. */
-const MIN_PRICE = 0.0001;
+const MIN_PRICE = 0.000001;
 
 interface OrderBody {
   symbol?: unknown;
@@ -126,6 +126,9 @@ orders.post("/", async (c) => {
   } catch {
     return c.json({ error: "Expected a JSON body.", code: "INVALID_ORDER" }, 400);
   }
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return c.json({ error: "Expected an order object.", code: "INVALID_ORDER" }, 400);
+  }
 
   const symbol = typeof body.symbol === "string" ? body.symbol.trim().toUpperCase() : "";
   const side = (typeof body.side === "string" ? body.side.trim().toUpperCase() : "") as OrderSide;
@@ -146,7 +149,7 @@ orders.post("/", async (c) => {
     );
   }
   if (!ORDER_TYPES.includes(orderType)) {
-    return c.json({ error: "Order type must be MARKET or LIMIT.", code: "INVALID_ORDER" }, 400);
+    return c.json({ error: `Order type must be one of ${ORDER_TYPES.join(", ")}.`, code: "INVALID_ORDER" }, 400);
   }
   if (!TIME_IN_FORCE.includes(timeInForce)) {
     return c.json({ error: "Time in force must be DAY or GTC.", code: "INVALID_ORDER" }, 400);
@@ -558,6 +561,7 @@ async function fillImmediately(
     symbol,
     fractionable,
     minSize,
+    multiplier,
   });
 
   if ("ok" in resolved) {
@@ -589,6 +593,7 @@ async function fillImmediately(
     p_price: price,
     p_marks: marks,
     p_pending_order_id: null,
+    p_multiplier: multiplier,
   });
 
   if (error) return c.json(...describeRpcError(error));

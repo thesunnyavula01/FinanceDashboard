@@ -8,7 +8,9 @@ import {
   type ReactNode,
 } from "react";
 import type { Session } from "@supabase/supabase-js";
+import { useQueryClient } from "@tanstack/react-query";
 import { supabase } from "./supabase";
+import { resetSessionCache } from "./refresh";
 
 export interface SignUpInput {
   email: string;
@@ -32,27 +34,40 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 class AuthProblem extends Error {}
 
 export function AuthProvider({ children }: { children: ReactNode }) {
+  const client = useQueryClient();
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     let active = true;
+    let owner: string | null = null;
+    let receivedEvent = false;
+
+    function accept(next: Session | null) {
+      if (!active) return;
+      const nextOwner = next?.user.id ?? null;
+      resetSessionCache(client, owner, nextOwner);
+      owner = nextOwner;
+      setSession(next);
+      setLoading(false);
+    }
 
     supabase.auth.getSession().then(({ data }) => {
-      if (!active) return;
-      setSession(data.session);
-      setLoading(false);
+      if (!receivedEvent) accept(data.session);
+    }).catch(() => {
+      if (!receivedEvent) accept(null);
     });
 
     const { data: sub } = supabase.auth.onAuthStateChange((_event, next) => {
-      setSession(next);
+      receivedEvent = true;
+      accept(next);
     });
 
     return () => {
       active = false;
       sub.subscription.unsubscribe();
     };
-  }, []);
+  }, [client]);
 
   const signIn = useCallback(async (email: string, password: string) => {
     const { error } = await supabase.auth.signInWithPassword({

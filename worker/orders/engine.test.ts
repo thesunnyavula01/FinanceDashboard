@@ -16,6 +16,14 @@ import {
 } from "./engine.ts";
 import type { MarketClock } from "../market/provider.ts";
 
+test("dollar-sized adjusted options use their verified multiplier", () => {
+  const order = { symbol: "AAPL300118C00150000", price: 3, multiplier: 1000 };
+  assert.deepEqual(resolveQuantity({ ...order, notional: 6500 }), { qty: 2 });
+  const small = resolveQuantity({ ...order, notional: 500 });
+  assert.equal("ok" in small && small.code, "INVALID_ORDER");
+  assert.deepEqual(resolveQuantity({ ...order, qty: 2 }), { qty: 2 });
+});
+
 /**
  * The behaviours Phase 4 has to get right, pinned.
  *

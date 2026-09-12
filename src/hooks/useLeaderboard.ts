@@ -67,6 +67,7 @@ export function useMemberBook(portfolioId: string | null) {
     queryFn: () => api.memberBook(portfolioId!),
     enabled: Boolean(portfolioId),
     staleTime: 30_000,
+    refetchInterval: 30_000,
   });
 
   const positions = data?.positions ?? [];

@@ -39,8 +39,7 @@ export function useQuotes(symbols: string[], enabled = true): QuotesState {
     queryFn: () => api.quotes(key),
     enabled: enabled && key.length > 0,
     refetchInterval: QUOTE_REFRESH_MS,
-    // Keep polling with the tab in the background: a member watching the
-    // leaderboard on a second monitor should not see a frozen price.
+    // Pause hidden tabs; the query refreshes stale prices when visible again.
     refetchIntervalInBackground: false,
     staleTime: QUOTE_REFRESH_MS,
     // Show the last good prices while the next poll is in flight, so the grid

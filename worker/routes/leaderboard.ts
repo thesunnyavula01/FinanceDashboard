@@ -135,7 +135,7 @@ leaderboard.get("/:portfolioId", async (c) => {
   }
   if (!portfolio) return c.json({ error: "No such member in this season." }, 404);
 
-  const [{ data: positions }, { data: trades }] = await Promise.all([
+  const [{ data: positions, error: positionsError }, { data: trades, error: tradesError }] = await Promise.all([
     supabase.from("positions").select("symbol, qty, avg_cost, multiplier").eq("portfolio_id", portfolio.id),
     supabase
       .from("trades")
@@ -144,6 +144,11 @@ leaderboard.get("/:portfolioId", async (c) => {
       .order("executed_at", { ascending: false })
       .limit(DETAIL_TRADES),
   ]);
+
+  if (positionsError || tradesError) {
+    console.error("Member book query failed:", positionsError ?? tradesError);
+    return c.json({ error: "Could not load that member's positions and trades." }, 500);
+  }
 
   const profile = profileOf(portfolio);
 

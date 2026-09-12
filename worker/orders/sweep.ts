@@ -291,6 +291,7 @@ export async function sweepRestingOrders(
       symbol: order.symbol,
       fractionable: asset?.fractionable,
       minSize: asset?.minOrderSize,
+      multiplier: order.multiplier === null ? undefined : Number(order.multiplier),
     });
 
     if ("ok" in resolved) {

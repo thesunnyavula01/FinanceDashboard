@@ -301,12 +301,24 @@ together on a cold cache produce one upstream request rather than twenty. A
 symbol nothing can price is negative-cached for 5 minutes, so one typo in a
 portfolio does not poll Alpaca every 20 seconds for the rest of the season.
 
+A failed provider request is different from a successful response with no price:
+failures retry after the ordinary quote TTL, including in the edge cache. They
+must never suppress a recovered venue for five minutes. Alpaca requests have an
+eight-second timeout so a hung request cannot indefinitely block shared readers.
+
 Both providers live behind the interfaces in `worker/market/provider.ts`
 so switching to a paid feed later is a one-file change.
 
 ---
 
 ## Auth
+
+The browser clears query caches when the session owner changes, including on
+sign-out, and remounts the authenticated shell for the new owner. Token refreshes
+for the same member preserve caches. Returning to a visible tab refreshes stale
+queries. Working orders continue polling outside equity hours for crypto fills,
+DAY expiry and cancellation; changes refresh the portfolio, blotter, history and
+standings together. Reservations are shown on F1, F2 and F5.
 
 Supabase signs session tokens with **ES256** on this project, not the legacy
 HS256 shared secret. The public keys are published at
@@ -1527,6 +1539,7 @@ root are four-line pointers to it, kept so that it is still picked up
 automatically; they are deliberately the only copy of nothing.
 
 - `docs/PLAN.md` - full build plan, phase by phase
+- `PLANNING/FUNCTIONAL-AUDIT-2026-09-12.md` - functional audit, fixes and verification
 - `SETUP.md` - account + API key checklist
 - `DEPLOYMENT.md` - Cloudflare connection. Build vars and runtime secrets live in
   two different dashboard stores; `VITE_*` must be build vars or the bundle ships

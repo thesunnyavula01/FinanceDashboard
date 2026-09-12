@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { parseSymbols, QuoteCache } from "./quotes.ts";
 import type { PriceProvider, Quote } from "./provider.ts";
+import { fanOut } from "./router.ts";
 
 /**
  * The cache is the reason a hundred members polling every twenty seconds does
@@ -246,6 +247,52 @@ test("a failing provider degrades to no price rather than an error", async () =>
   const result = await new QuoteCache({ provider, ttlSeconds: 20, cache: null }).get(["AAPL"]);
   assert.deepEqual(result.unknown, ["AAPL"]);
   assert.equal(result.quotes.size, 0);
+});
+
+test("a provider outage retries on the quote interval instead of hiding prices for five minutes", async () => {
+  const { provider } = stubProvider();
+  const clock = fakeClock();
+  let calls = 0;
+  provider.quotes = async () => {
+    if (++calls === 1) throw new Error("temporary outage");
+    return new Map([["AAPL", quote("AAPL", 101)]]);
+  };
+  const { cache: edge } = stubEdgeCache();
+  const first = new QuoteCache({ provider, ttlSeconds: 20, cache: edge, now: clock.now });
+  assert.deepEqual((await first.get(["AAPL"])).unknown, ["AAPL"]);
+  await first.get(["AAPL"]);
+  assert.equal(calls, 1, "failure backs off to avoid a request storm");
+  clock.advance(21_000);
+  const second = new QuoteCache({ provider, ttlSeconds: 20, cache: edge, now: clock.now });
+  assert.equal((await second.get(["AAPL"])).quotes.get("AAPL")?.price, 101);
+  assert.equal(calls, 2, "the edge cache must not preserve the outage for five minutes either");
+});
+
+test("a failed asset class recovers while genuine missing symbols stay negatively cached", async () => {
+  const { provider } = stubProvider();
+  const clock = fakeClock();
+  let failed = true;
+  const batches: string[][] = [];
+  provider.quotes = async (symbols) => {
+    batches.push(symbols);
+    return fanOut(symbols, {
+      EQUITY: async () => new Map([["AAPL", quote("AAPL", 100)]]),
+      CRYPTO: async () => {
+        if (failed) throw new Error("crypto unavailable");
+        return new Map([["BTC/USD", quote("BTC/USD", 50_000)]]);
+      },
+    });
+  };
+  const cache = new QuoteCache({ provider, ttlSeconds: 20, now: clock.now });
+  const symbols = ["AAPL", "ZZZZ", "BTC/USD"];
+  const first = await cache.get(symbols);
+  assert.equal(first.quotes.get("AAPL")?.price, 100);
+  failed = false;
+  clock.advance(21_000);
+  const next = await cache.get(symbols);
+  assert.equal(next.quotes.get("BTC/USD")?.price, 50_000);
+  assert.deepEqual(batches[1], ["AAPL", "BTC/USD"]);
+  assert.deepEqual(next.unknown, ["ZZZZ"]);
 });
 
 // ---------------------------------------------------------------------------

@@ -26,7 +26,7 @@ import type { ValuedPosition } from "@/lib/portfolio";
  */
 export function Positions() {
   const navigate = useNavigate();
-  const { rows, totals, note, asOf, atLastClose, isLoading, isError, pricesUnavailable } =
+  const { rows, totals, note, asOf, atLastClose, isLoading, isError, pricesUnavailable, reservedCash } =
     usePortfolio();
 
   const {
@@ -236,7 +236,7 @@ export function Positions() {
       overflow-auto` — does the scrolling.
     */
     <div className="flex min-h-full flex-col md:h-full">
-      <PortfolioStats totals={totals} positionCount={rows.length} />
+      <PortfolioStats totals={totals} positionCount={rows.length} reservedCash={reservedCash} />
       <MarginWarning totals={totals} />
 
       {/*

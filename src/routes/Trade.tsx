@@ -46,6 +46,12 @@ const TABS = [
  */
 export function Trade() {
   const location = useLocation();
+  return <TradeScreen key={location.key} />;
+}
+
+/** A new command-bar navigation starts a fresh ticket, including any chain selection. */
+function TradeScreen() {
+  const location = useLocation();
   const prefill = (location.state as { order?: TicketPrefill } | null)?.order ?? null;
 
   const { positions, totals, season, note, isLoading } = usePortfolio();
@@ -55,7 +61,7 @@ export function Trade() {
   // the ticket is the same gesture the command bar performs, so it uses the
   // same mechanism rather than a second one.
   const [view, setView] = useState<"blotter" | "chain">("blotter");
-  const [picked, setPicked] = useState<{ symbol: string; key: string } | null>(null);
+  const [picked, setPicked] = useState<{ symbol: string; multiplier: number; key: string } | null>(null);
   // Mirrored up from the ticket so the chain can follow it. The ticket stays
   // the owner — this is a copy for the panel beside it, not a second source.
   const [instrument, setInstrument] = useState(prefill?.symbol ?? "");
@@ -66,7 +72,7 @@ export function Trade() {
   const chainState = useChain(underlying, view === "chain");
 
   function loadContract(contract: ChainContract) {
-    setPicked({ symbol: contract.symbol, key: `${contract.symbol}:${Date.now()}` });
+    setPicked({ symbol: contract.symbol, multiplier: contract.multiplier, key: `${contract.symbol}:${Date.now()}` });
     setInstrument(contract.symbol);
   }
 
@@ -126,7 +132,7 @@ export function Trade() {
           // chain hands over a contract, so a second "BUY 500 NVDA" refills the
           // fields rather than being ignored as an unchanged prop.
           key={picked?.key ?? location.key}
-          initial={picked ? { symbol: picked.symbol } : prefill}
+          initial={picked ? { symbol: picked.symbol, multiplier: picked.multiplier } : prefill}
           onInstrumentChange={(symbol, assetClass) => {
             setInstrument(symbol);
             setView(assetClass === "OPTION" ? "chain" : "blotter");

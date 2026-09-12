@@ -51,6 +51,7 @@ interface OrderTicketProps {
   /** Pre-fills the ticket, so the command bar can hand off a parsed order. */
   initial?: {
     symbol?: string;
+    multiplier?: number;
     side?: OrderSide;
     qty?: number;
     notional?: number;
@@ -142,7 +143,9 @@ export function OrderTicket({
   // it freezes it, and puts the irreversible press behind a second deliberate
   // one on a panel the member has had a chance to read.
   const [reviewing, setReviewing] = useState(false);
-  const [timeInForce, setTimeInForce] = useState<TimeInForce>("DAY");
+  const [timeInForce, setTimeInForce] = useState<TimeInForce>(
+    initial?.symbol && classify(initial.symbol) === "CRYPTO" ? "GTC" : "DAY",
+  );
   const [mode, setMode] = useState<AmountMode>(initial?.notional !== undefined ? "USD" : "SHARES");
   const [amount, setAmount] = useState(
     initial?.qty !== undefined
@@ -177,7 +180,9 @@ export function OrderTicket({
   const security = valid ? securities[symbol] : undefined;
   const held = positions.find((p) => p.symbol === symbol);
   const copy = CLASS_COPY[assetClass];
-  const multiplier = multiplierFor(symbol);
+  const multiplier = held?.multiplier
+    ?? (initial?.symbol === symbol ? initial.multiplier : undefined)
+    ?? multiplierFor(symbol);
   const alwaysOpen = assetClass === "CRYPTO";
 
   const disabledSides = useMemo(() => {
@@ -258,7 +263,7 @@ export function OrderTicket({
           ? `A ${side} stop has to sit below the market, which is ${money(price)}.`
           : null
       : null;
-  const limitValid = orderType === "MARKET" || (Number.isFinite(limit) && (limit as number) > 0);
+  const limitValid = !hasLimit(orderType) || (Number.isFinite(limit) && (limit as number) > 0);
 
   const parsedAmount = Number(amount);
   const hasAmount = amount.trim() !== "" && Number.isFinite(parsedAmount) && parsedAmount > 0;
@@ -319,15 +324,16 @@ export function OrderTicket({
       qty: mode === "SHARES" ? sized.qty : undefined,
       notional: mode === "USD" ? parsedAmount : undefined,
       referencePrice: price,
+      multiplier,
     });
-  }, [sized, willQueue, price, side, orderType, limit, trigger, mode, parsedAmount]);
+  }, [sized, willQueue, price, side, orderType, limit, trigger, mode, parsedAmount, multiplier]);
 
   /** What the order does to the balances, if it fills right now. */
   const consequence = useMemo(() => {
     if (!sized || !sizingPrice) return null;
 
     const cashAfter = totals.cash + CASH_FACTOR[side] * sized.value;
-    const buyingPowerAfter = totals.netBuyingPower + BUYING_POWER_FACTOR[side] * sized.value;
+    const buyingPowerAfter = totals.netBuyingPower - reservedCash + BUYING_POWER_FACTOR[side] * sized.value;
 
     return {
       cashAfter,
@@ -335,10 +341,10 @@ export function OrderTicket({
       unaffordable: (side === "BUY" || side === "SHORT") && buyingPowerAfter < 0,
       realizing:
         held && closing
-          ? (sizingPrice - held.avgCost) * (side === "SELL" ? sized.qty : -sized.qty)
+          ? (sizingPrice - held.avgCost) * (side === "SELL" ? sized.qty : -sized.qty) * multiplier
           : null,
     };
-  }, [sized, sizingPrice, totals, side, held, closing]);
+  }, [sized, sizingPrice, totals, side, held, closing, multiplier, reservedCash]);
 
   // Buying power free after what resting orders already hold.
   const freeBuyingPower = Math.max(0, totals.netBuyingPower - reservedCash);

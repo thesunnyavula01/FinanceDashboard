@@ -218,6 +218,7 @@ export function isMarketable(
  * it fills, and Monday need not open where Friday closed.
  */
 export function estimateReservation(input: {
+  multiplier?: number;
   side: OrderSide;
   orderType: OrderType;
   limitPrice: number | null;
@@ -253,7 +254,7 @@ export function estimateReservation(input: {
     : hasStop(orderType) && stopPrice !== null
       ? Math.max(stopPrice, referencePrice)
       : referencePrice;
-  const worst = qty * basis * (capped ? 1 : 1 + MARKET_ORDER_BUFFER);
+  const worst = qty * (input.multiplier ?? 1) * basis * (capped ? 1 : 1 + MARKET_ORDER_BUFFER);
 
   return {
     cash: side === "SHORT" ? worst * (REG_T_MARGIN_MULTIPLIER - 1) : worst,

@@ -17,11 +17,10 @@ import { App } from "./App";
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
-      // Quotes carry their own 20s interval. Everything else is fresh enough
-      // for a minute and should not refetch on every window focus.
+      // Returning to a suspended/background tab refreshes stale data promptly.
       staleTime: 60_000,
       retry: 1,
-      refetchOnWindowFocus: false,
+      refetchOnWindowFocus: true,
     },
   },
 });

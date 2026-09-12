@@ -1,8 +1,9 @@
 import { useMemo } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, type OrderRequest, type PortfolioResponse } from "@/lib/api";
+import { api, type OrderRequest, type PortfolioResponse, type WorkingOrdersResponse } from "@/lib/api";
 import { valuePortfolio, type PortfolioTotals, type ValuedPosition } from "@/lib/portfolio";
-import { QUOTE_REFRESH_MS, useQuotes, useSecurities } from "./useQuotes";
+import { useQuotes, useSecurities } from "./useQuotes";
+import { invalidatePortfolioViews, workingOrdersChanged, workingOrdersInterval } from "../lib/refresh";
 
 /**
  * The member's own portfolio, valued at live prices.
@@ -36,9 +37,11 @@ export interface PortfolioState {
   isError: boolean;
   /** Prices failed; the grid is showing average costs, not marks. */
   pricesUnavailable: boolean;
+  reservedCash: number;
 }
 
 export function usePortfolio(): PortfolioState {
+  const { reservedCash } = useWorkingOrders();
   const {
     data,
     isPending,
@@ -91,7 +94,8 @@ export function usePortfolio(): PortfolioState {
     atLastClose,
     isLoading: isPending,
     isError: portfolioError,
-    pricesUnavailable: quotesError && symbols.length > 0,
+    pricesUnavailable: symbols.length > 0 && (quotesError || symbols.some((symbol) => !quotes[symbol])),
+    reservedCash,
   };
 }
 
@@ -101,6 +105,7 @@ export function useBlotter(limit = 100) {
     queryKey: [...BLOTTER_KEY, limit],
     queryFn: () => api.blotter(limit),
     staleTime: 30_000,
+    refetchInterval: 30_000,
   });
 
   return {
@@ -127,14 +132,11 @@ export function usePlaceOrder() {
   return useMutation({
     mutationFn: (order: OrderRequest) => api.placeOrder(order),
     onSuccess: () => {
-      void client.invalidateQueries({ queryKey: PORTFOLIO_KEY });
-      void client.invalidateQueries({ queryKey: BLOTTER_KEY });
+      invalidatePortfolioViews(client);
       // A queued order changes nothing but the working list and the reserved
       // buying power — but the same call can also come back FILLED, so both
       // are refreshed rather than guessed at from the response shape.
       void client.invalidateQueries({ queryKey: WORKING_KEY });
-      // /auth/me carries the cash balance shown in the status rail.
-      void client.invalidateQueries({ queryKey: ["me"] });
     },
   });
 }
@@ -142,16 +144,22 @@ export function usePlaceOrder() {
 /**
  * Orders waiting for the market.
  *
- * Polled on the quote interval while the market is open, because the sweep runs
- * once a minute and a member watching a limit order wants to see it go. Outside
- * a session nothing can change it — no session, no fills — so the poll stops
- * and the list is only refetched when the member does something.
+ * Crypto fills, DAY expiry and cancellations can happen outside stock hours.
+ * Poll pending orders every twenty seconds and idle lists once a minute.
  */
 export function useWorkingOrders(marketOpen = false) {
+  const client = useQueryClient();
   const { data, isPending, isError } = useQuery({
     queryKey: WORKING_KEY,
-    queryFn: api.workingOrders,
-    refetchInterval: marketOpen ? QUOTE_REFRESH_MS : false,
+    queryFn: async () => {
+      const previous = client.getQueryData<WorkingOrdersResponse>(WORKING_KEY);
+      const next = await api.workingOrders();
+      // This runs once per shared request, even when both the strip and list
+      // observe it. Updating each observer separately caused duplicate refreshes.
+      if (workingOrdersChanged(previous, next)) invalidatePortfolioViews(client);
+      return next;
+    },
+    refetchInterval: (query) => workingOrdersInterval(query.state.data, marketOpen),
     staleTime: 10_000,
   });
 

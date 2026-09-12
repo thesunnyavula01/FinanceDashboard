@@ -421,6 +421,8 @@ export function tradingWindow(clock: MarketClock, symbol?: string): Rejection | 
 }
 
 export interface QuantityRequest {
+  /** Verified contract metadata; adjusted options need not deliver 100 shares. */
+  multiplier?: number;
   /** Share count. Mutually exclusive with `notional`. */
   qty?: number;
   /** Dollar amount, converted at the price the Worker fetched. */
@@ -448,6 +450,10 @@ export interface QuantityRequest {
  */
 export function resolveQuantity(request: QuantityRequest): { qty: number } | Rejection {
   const { price, symbol, minSize } = request;
+  const multiplier = request.multiplier ?? multiplierFor(symbol);
+  if (!Number.isFinite(multiplier) || multiplier <= 0) {
+    return reject("INVALID_ORDER", `Contract size must be greater than zero for ${symbol}.`);
+  }
 
   // An option contract is indivisible whatever the universe says about it —
   // options are not in the KV asset list at all, so `fractionable` arrives
@@ -486,7 +492,7 @@ export function resolveQuantity(request: QuantityRequest): { qty: number } | Rej
     //
     // Floor rather than round, for the same reason as below: a $500 order must
     // never cost $500.01.
-    qty = Math.floor((notional / (price * multiplierFor(symbol))) * 1e6) / 1e6;
+    qty = Math.floor((notional / (price * multiplier)) * 1e6) / 1e6;
   }
 
   if (fractionable === false) {
@@ -495,7 +501,7 @@ export function resolveQuantity(request: QuantityRequest): { qty: number } | Rej
       const unit = multiplierFor(symbol) > 1 ? "contract" : "share";
       // An option is quoted per share and sold per contract, so the price a
       // member is refused at has to be the one they would actually pay.
-      const each = dollars(price * multiplierFor(symbol));
+      const each = dollars(price * multiplier);
       return {
         ok: false,
         code: "INVALID_ORDER",

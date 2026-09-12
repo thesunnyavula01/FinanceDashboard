@@ -302,7 +302,7 @@ export class AlpacaOptionsProvider {
   async #get<T>(url: string): Promise<T> {
     let response: Response;
     try {
-      response = await fetch(url, { headers: this.#headers() });
+      response = await fetch(url, { headers: this.#headers(), signal: AbortSignal.timeout(8000) });
     } catch (cause) {
       throw new MarketDataError("alpaca-options", `Could not reach Alpaca: ${String(cause)}`, 502);
     }

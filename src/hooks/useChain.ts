@@ -44,20 +44,20 @@ export function useChain(underlying: string, enabled = true) {
   const query = useQuery({
     queryKey: ["chain", debounced, asked],
     queryFn: () => api.chain(debounced, asked || undefined),
-    enabled: enabled && valid,
+    enabled: enabled && valid && debounced === symbol,
     refetchInterval: 20_000,
     staleTime: 10_000,
     // A chain that has loaded once should not blank out while the next
     // expiration arrives — the ladder jumping to an empty panel and back reads
     // as a fault rather than as a fetch.
-    placeholderData: (previous) => previous,
+    placeholderData: (previous) => previous?.underlying === symbol ? previous : undefined,
     retry: false,
   });
 
   return {
-    chain: query.data ?? null,
+    chain: query.data?.underlying === symbol ? query.data : null,
     /** What the server actually drew, which may not be what was asked for. */
-    expiration: query.data?.expiration ?? null,
+    expiration: query.data?.underlying === symbol ? query.data.expiration : null,
     setExpiration: (expiration: string) => setSelection({ underlying: debounced, expiration }),
     isLoading: query.isLoading,
     isError: query.isError,

@@ -2,6 +2,7 @@ import { AlpacaProvider, alpacaConfigFromEnv } from "./alpaca.ts";
 import { AlpacaCryptoProvider } from "./crypto.ts";
 import { AlpacaOptionsProvider } from "./options.ts";
 import { classify, type AssetClass } from "./symbols.ts";
+import { MarketDataMap } from "./provider.ts";
 import type {
   BarQuery,
   CalendarDay,
@@ -71,27 +72,35 @@ export async function fanOut<T>(
   symbols: string[],
   fetchers: Partial<Record<AssetClass, SymbolFetcher<T>>>,
 ): Promise<Map<string, T>> {
-  const out = new Map<string, T>();
+  const out = new MarketDataMap<T>();
   if (symbols.length === 0) return out;
 
   const jobs: Promise<Map<string, T>>[] = [];
+  const batches: string[][] = [];
 
   for (const [assetClass, batch] of partitionByClass(symbols)) {
     const fetcher = fetchers[assetClass];
     // A class with no fetcher is not an error: asking for an option quote
     // before the options provider exists should leave it unpriced, which the
     // caller already knows how to render, rather than throwing.
-    if (fetcher) jobs.push(fetcher(batch));
+    if (fetcher) {
+      jobs.push(fetcher(batch));
+      batches.push(batch);
+    }
   }
 
-  for (const settled of await Promise.allSettled(jobs)) {
+  for (const [index, settled] of (await Promise.allSettled(jobs)).entries()) {
     if (settled.status !== "fulfilled") {
       // Logged, not rethrown. One venue failing is not every venue failing, and
       // the caller distinguishes "no price" perfectly well already.
       console.error("Market data class failed:", settled.reason);
+      for (const symbol of batches[index]!) out.unavailable.add(symbol);
       continue;
     }
     for (const [symbol, value] of settled.value) out.set(symbol, value);
+    if (settled.value instanceof MarketDataMap) {
+      for (const symbol of settled.value.unavailable) out.unavailable.add(symbol);
+    }
   }
 
   return out;
@@ -173,8 +182,7 @@ export class RoutingProvider implements PriceProvider {
     if (equity.status !== "fulfilled") throw equity.reason;
 
     if (crypto.status !== "fulfilled") {
-      console.error("Crypto asset list failed; syncing equities only:", crypto.reason);
-      return equity.value;
+      throw crypto.reason;
     }
 
     return [...equity.value, ...crypto.value];

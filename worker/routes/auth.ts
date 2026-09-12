@@ -29,6 +29,9 @@ auth.post("/signup", async (c) => {
   } catch {
     return c.json({ error: "Expected a JSON body." }, 400);
   }
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return c.json({ error: "Expected a signup object." }, 400);
+  }
 
   const email = typeof body.email === "string" ? body.email.trim().toLowerCase() : "";
   const password = typeof body.password === "string" ? body.password : "";

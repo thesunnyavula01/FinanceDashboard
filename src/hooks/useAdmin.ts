@@ -83,6 +83,7 @@ function useAdminMutation<TArgs, TResult>(fn: (args: TArgs) => Promise<TResult>)
         WORKING_KEY,
         ["me"],
         ["history"],
+        ["member-book"],
       ]) {
         void client.invalidateQueries({ queryKey: key });
       }

@@ -173,6 +173,11 @@ export interface PriceProvider {
   assets(): Promise<TradableAsset[]>;
 }
 
+/** Missing data and a failed request have different retry lifetimes. */
+export class MarketDataMap<T> extends Map<string, T> {
+  readonly unavailable = new Set<string>();
+}
+
 /** Company fundamentals. One symbol per call, so callers must cache forever. */
 export interface ProfileProvider {
   readonly name: string;

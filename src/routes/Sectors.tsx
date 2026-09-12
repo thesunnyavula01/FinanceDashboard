@@ -42,7 +42,7 @@ import { CONCENTRATION_LIMIT, sectorBreakdown, type SectorExposure } from "@/lib
  * there is still no endpoint behind this screen.
  */
 export function Sectors() {
-  const { rows, totals, symbols, note, isLoading, isError, pricesUnavailable } = usePortfolio();
+  const { rows, totals, symbols, note, isLoading, isError, pricesUnavailable, reservedCash } = usePortfolio();
 
   // Both of these hit cache entries usePortfolio has already primed — useQuotes
   // and useSecurities sort and dedupe the symbol list into the query key, so
@@ -210,7 +210,7 @@ export function Sectors() {
       `min-h-0 flex-1 overflow-auto` — scrolls. Admin.tsx takes the same view.
     */
     <div className="flex min-h-full flex-col xl:h-full">
-      <PortfolioStats totals={totals} positionCount={rows.length} />
+      <PortfolioStats totals={totals} positionCount={rows.length} reservedCash={reservedCash} />
       <MarginWarning totals={totals} />
       <ConcentrationWarning sectors={concentrated} />
 

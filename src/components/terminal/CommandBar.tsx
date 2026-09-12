@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { api, ApiError, type OrderSide, type SecuritiesResponse } from "@/lib/api";
 import type { TicketPrefill } from "@/routes/Trade";
 import { money, moneySigned, percent } from "@/lib/format";
+import { isTradableSymbol } from "@/lib/symbols";
 import { screensFor } from "./FunctionNav";
 
 type Response = { tone: "ok" | "error" | "busy"; text: string } | null;
@@ -188,7 +189,7 @@ export function CommandBar({ isAdmin = false }: { isAdmin?: boolean }) {
       return;
     }
 
-    if (/^[A-Z][A-Z0-9.-]{0,9}$/.test(command)) {
+    if (isTradableSymbol(command)) {
       void lookUp(command);
       setEntry("");
       return;

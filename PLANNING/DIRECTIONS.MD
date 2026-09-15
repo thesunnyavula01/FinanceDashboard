@@ -18,8 +18,8 @@ Scale target: 30-100 members. Deployed on Cloudflare Workers.
 | Backend | Hono, running inside the **same** Worker that serves the SPA via Workers Assets |
 | Database + auth | Supabase Postgres, Supabase Auth (email + password, **email confirmation off**) |
 | Quote cache | Isolate memory + the Cache API (**not** KV — see below) |
-| KV | Nightly copy of the tradable asset list, for ticker autocomplete |
-| Scheduled work | Cloudflare Cron Triggers (asset-list sync, nightly portfolio snapshots) |
+| KV | Nightly asset list for autocomplete; five-minute recovery checkpoints |
+| Scheduled work | Cloudflare Cron Triggers (order sweeps, five-minute backups, asset-list sync, nightly portfolio snapshots) |
 
 **Why Vite + Hono and not Next.js:** Cloudflare now recommends Workers Assets over
 Pages, and this app is entirely auth-gated with no SEO or SSR requirement. The
@@ -787,6 +787,37 @@ true, `provolatile` `s`, `proconfig` `search_path=public`, the
 ---
 
 ## Analytics
+
+### Five-minute recovery checkpoints and price continuity
+
+`worker/analytics/backup.ts` runs on `*/5 * * * *`, independently of order
+sweeps and nightly valuation snapshots. One embedded database statement captures
+the active season and every portfolio's cash, positions, trades and pending
+orders. Embedded counts detect truncated collections before anything is saved.
+Versioned checkpoints live for 24 hours in the existing KV namespace under
+`portfolio-backup:v1:`; an officer can list and export them through
+`GET /api/admin/backups` and `GET /api/admin/backups/:key`.
+
+Each checkpoint also includes observed prices. A separate price-only KV value
+provides display fallback after a cold start. Two writes every five minutes are
+576 writes/day, plus the existing nightly universe sync. Checkpoints are capped
+at 2 MiB to keep 288 retained versions within the free storage budget. Capacity
+or truncation errors fail the scheduled run and preserve previous checkpoints.
+This is a recovery copy of the active trading season, not a full Supabase/auth
+backup. See `DEPLOYMENT.md` for recovery and capacity procedures.
+
+The question marks reported on F1 came from `valuePortfolio`: missing quotes
+were replaced with average purchase costs, zeroing unrealized P/L. A provider
+outage was returned as HTTP 200 with missing symbols, so TanStack Query's
+placeholder did not preserve the previous prices. The browser now retains each
+symbol's last successful price across empty/partial polls and symbol-set changes.
+A newer observed price takes precedence over an older server backup. Saved
+prices retain their observation timestamps and show `Saved`; holdings with no
+price history show `Cost`. Authenticated responses are `no-store`.
+
+Only the display endpoint reads saved prices. The order engine continues to use
+the live quote cache. Backups never restore cash, holdings or trades automatically:
+a quote outage must not undo legitimate trades made since a checkpoint.
 
 ### The equity curve is reconstructed, not just read
 

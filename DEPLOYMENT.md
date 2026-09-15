@@ -1,5 +1,49 @@
 # Deploying to Cloudflare
 
+## Five-minute portfolio recovery (2026-09-15)
+
+No migration, credential or namespace is needed. Deploy the Worker and the
+updated `wrangler.jsonc` together to register `*/5 * * * *`. Cloudflare can take
+up to 15 minutes to propagate a new cron trigger. Verify a successful
+`Portfolio backup:` event in Worker logs and a recent entry from the
+officer-only `GET /api/admin/backups` endpoint. The current query was verified
+read-only against the live database: 32 portfolios, 76 positions, 151 trades,
+133,741 bytes before prices.
+
+Backups retain the active season, portfolio cash and starting balances, positions,
+trades, pending orders and observed prices for 24 hours. They run without a browser
+session. A price outage preserves the previous price's timestamp; it does not
+make that price current. KV is eventually consistent, so another location can
+briefly see the previous checkpoint. Live prices still use the 20-second cache.
+
+### Export and recovery
+
+1. As an officer, request `GET /api/admin/backups` with your normal session token.
+   Results are newest first; follow `cursor` if supplied. Compare each key's
+   `metadata.capturedAt` with the time of the incident.
+2. Download `GET /api/admin/backups/<URL-encoded key>` using the selected exact
+   key. This is an authenticated JSON download; it includes private pending orders.
+   The same checkpoint can be exported from Cloudflare's KV dashboard under
+   namespace `financedashboard-QUOTES`, prefix `portfolio-backup:v1:`.
+3. Compare the saved book and trade ledger with the current database before
+   restoring anything. Ordinary quote outages are handled automatically by
+   saved **display prices** and require no database restore. For actual database
+   damage, lock trading, retain a current export, reconcile fills after the
+   checkpoint, and apply an explicitly reviewed transactional database repair.
+   There is deliberately no automatic balance rollback endpoint.
+
+The job checks every embedded row count to reject truncated responses and caps
+each checkpoint at 2 MiB. A failed scheduled run must be investigated; previous
+checkpoints still expire after 24 hours. If the season outgrows the row limit or
+storage budget, increase the database response limit and move checkpoints to
+larger storage before raising the cap. This export does not include auth users,
+profiles, inactive seasons or historical analytics snapshots, and is not a full
+database disaster-recovery backup.
+
+Budget: 288 checkpoints + 288 price-only writes daily, alongside roughly 55
+universe writes. See [KV limits](https://developers.cloudflare.com/kv/platform/limits/)
+and [cron propagation](https://developers.cloudflare.com/workers/configuration/cron-triggers/).
+
 ## Phase 10 — Research
 
 Research adds no migration, secret, namespace or cron. The last migration is
@@ -282,7 +326,7 @@ pushes to deploy automatically.
 
 ## The Cron Triggers
 
-`wrangler.jsonc` declares two schedules, and `wrangler deploy` registers them.
+`wrangler.jsonc` declares three schedules, and `wrangler deploy` registers them.
 They appear under **Settings → Trigger Events** in the dashboard; if that list
 is empty after a deploy, nothing scheduled is running.
 

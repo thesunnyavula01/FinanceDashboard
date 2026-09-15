@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { requireAuth, type AuthedBindings } from "../middleware/auth.ts";
 import { describeMarketError } from "../market/provider.ts";
 import { MAX_SYMBOLS_PER_REQUEST, parseSymbols, quoteCache } from "../market/quotes.ts";
+import { readSavedPrices, usableSavedPrice } from "../analytics/backup.ts";
 
 export const quotes = new Hono<AuthedBindings>();
 
@@ -32,14 +33,26 @@ quotes.get("/", requireAuth, async (c) => {
 
   try {
     const result = await quoteCache(c.env).get(symbols, (p) => c.executionCtx.waitUntil(p));
+    const asOf = new Date().toISOString();
+    const displayed = Object.fromEntries([...result.quotes].map(([symbol, quote]) =>
+      [symbol, { ...quote, receivedAt: asOf, stale: false }]));
+    if (result.unknown.length) {
+      const saved = await readSavedPrices(c.env.QUOTES);
+      for (const symbol of result.unknown) {
+        const entry = saved[symbol];
+        if (usableSavedPrice(entry)) {
+          displayed[symbol] = { ...entry!.quote, receivedAt: entry!.savedAt, stale: true };
+        }
+      }
+    }
 
     return c.json({
-      quotes: Object.fromEntries(result.quotes),
+      quotes: displayed,
       /** Valid-looking tickers that no provider could price. */
-      unknown: result.unknown,
+      unknown: result.unknown.filter((symbol) => !displayed[symbol]),
       /** Malformed tickers, dropped before they ever reached a provider. */
       rejected,
-      asOf: new Date().toISOString(),
+      asOf,
       /** Which tier served each symbol. Handy when checking the batching claim. */
       cache: result.stats,
       limit: MAX_SYMBOLS_PER_REQUEST,

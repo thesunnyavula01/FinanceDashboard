@@ -46,6 +46,7 @@ export function MemberBook({
       render: (r) => (
         <span className="flex items-center gap-1.5">
           <span className="num font-medium text-ink">{r.symbol}</span>
+          {r.stale && <span className="label text-accent">{r.priceStatus === "saved" ? "Saved" : "Cost"}</span>}
           {r.isShort && (
             <span className="label text-loss" title="Short position">
               S

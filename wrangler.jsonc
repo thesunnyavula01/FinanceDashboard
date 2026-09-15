@@ -49,6 +49,8 @@
 
   "triggers": {
     "crons": [
+      // Durable portfolio checkpoints, including saved display prices, 24/7.
+      "*/5 * * * *",
       // The resting-order sweep: fills orders queued while the market was shut,
       // and expires day orders at the close.
       //

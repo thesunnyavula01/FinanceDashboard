@@ -32,8 +32,10 @@ export interface ValuedPosition extends PositionRow {
   /** Share of gross exposure, so a short counts toward the total it consumes. */
   weight: number;
   isShort: boolean;
-  /** No live quote for this symbol; it is being shown at its average cost. */
+  /** No current quote; a saved price or, as a last resort, cost is displayed. */
   stale: boolean;
+  priceStatus: "current" | "saved" | "cost";
+  priceAsOf: string | null;
 }
 
 export interface PortfolioTotals {
@@ -109,7 +111,7 @@ export function valuePortfolio({
       last,
       quote,
       security,
-      stale: !quote,
+      stale: !quote || Boolean(quote.stale),
     };
   });
 
@@ -145,6 +147,8 @@ export function valuePortfolio({
       weight: gross === 0 ? 0 : (Math.abs(marketValue) / gross) * 100,
       isShort: position.qty < 0,
       stale,
+      priceStatus: !quote ? "cost" : quote.stale ? "saved" : "current",
+      priceAsOf: quote?.receivedAt ?? quote?.asOf ?? null,
     };
   });
 

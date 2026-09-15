@@ -583,12 +583,13 @@ export function OrderTicket({
           </div>
 
           <div className="border border-line bg-canvas px-2 py-1.5 sm:min-w-[9rem]">
-            <div className="label">{marketOpen ? "Last" : "Prev close"}</div>
+            <div className="label">{quote?.stale ? "Saved price" : marketOpen ? "Last" : "Prev close"}</div>
             {price ? (
               <>
                 <Value value={price} flash className="text-lede">
                   {money(price)}
                 </Value>
+                {quote?.stale && <div className="label text-accent">Live price unavailable</div>}
                 <div className="mt-0.5">
                   {quote?.dayChange === null ? (
                     <span className="label label-ink">No change today</span>

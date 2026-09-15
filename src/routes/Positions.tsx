@@ -67,8 +67,10 @@ export function Positions() {
             </span>
           )}
           {r.stale && (
-            <span className="label" title="No live price; shown at average cost">
-              ?
+            <span className="label text-accent" title={r.priceStatus === "saved"
+              ? `Live price unavailable. Last saved price${r.priceAsOf ? ` received ${new Date(r.priceAsOf).toLocaleString()}` : ""}.`
+              : "No current or saved price available; valued at average cost."}>
+              {r.priceStatus === "saved" ? "Saved" : "Cost"}
             </span>
           )}
         </span>
@@ -272,7 +274,9 @@ export function Positions() {
               {isError ? (
                 <span className="text-loss">Portfolio unavailable</span>
               ) : pricesUnavailable ? (
-                <span className="text-loss">Prices unavailable — showing cost basis</span>
+                <span className="text-accent">{rows.some((r) => r.priceStatus === "cost")
+                  ? "Prices interrupted · unpriced holdings marked Cost"
+                  : "Prices interrupted · showing last saved prices"}</span>
               ) : rows.length === 0 ? null : (
                 <span className="text-ink-dim">
                   {atLastClose ? "At last close" : "Live"}

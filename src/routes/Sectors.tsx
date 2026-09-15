@@ -191,7 +191,7 @@ export function Sectors() {
   const problem = isError
     ? "Portfolio unavailable"
     : pricesUnavailable
-      ? "Prices unavailable — showing cost basis"
+      ? "Prices interrupted — saved prices or cost estimates"
       : null;
 
   return (

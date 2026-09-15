@@ -8,6 +8,8 @@
 
 import { accessToken } from "./supabase";
 import type { AssetClass } from "./symbols";
+import type { QuotesResponse } from "./quote-types";
+export type { Quote, QuotesResponse } from "./quote-types";
 
 export type SessionState = "OPEN" | "CLOSED" | "PRE" | "POST";
 
@@ -85,7 +87,7 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
     headers.Authorization = `Bearer ${token}`;
   }
 
-  const response = await fetch(`/api${path}`, { ...init, headers });
+  const response = await fetch(`/api${path}`, { ...init, headers, cache: "no-store" });
 
   if (!response.ok) {
     const body = (await response.json().catch(() => null)) as {
@@ -100,39 +102,6 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   }
 
   return response.json() as Promise<T>;
-}
-
-/**
- * A live price. Every field is priced by the Worker — a client that invents a
- * price gets it ignored, which is why nothing here is ever sent back up.
- */
-export interface Quote {
-  symbol: string;
-  price: number;
-  /**
-   * Which field upstream produced `price`. "bar" outside market hours means
-   * the official close rather than a thin extended-hours print.
-   */
-  source: "trade" | "quote" | "bar" | "prev-bar";
-  prevClose: number | null;
-  dayChange: number | null;
-  dayChangePercent: number | null;
-  dayOpen: number | null;
-  dayHigh: number | null;
-  dayLow: number | null;
-  dayVolume: number | null;
-  asOf: string | null;
-}
-
-export interface QuotesResponse {
-  quotes: Record<string, Quote>;
-  /** Valid-looking tickers no provider could price. */
-  unknown: string[];
-  /** Malformed tickers, dropped before they reached a provider. */
-  rejected: string[];
-  asOf: string;
-  cache: { memory: number; edge: number; fetched: number };
-  limit: number;
 }
 
 export interface Security {

@@ -13,9 +13,10 @@ import { syncUniverse } from "./market/universe.ts";
 import { sweepRestingOrders } from "./orders/sweep.ts";
 import { snapshotSeason } from "./analytics/snapshot.ts";
 import { bookIsSettled, settleExpiries } from "./orders/expiry.ts";
+import { backupSeason } from "./analytics/backup.ts";
 
 /**
- * The cron expressions, matched against `event.cron` so the two schedules never
+ * The cron expressions, matched against `event.cron` so the schedules never
  * run each other's work. Both must stay identical to the entries in
  * wrangler.jsonc — a typo here is a job that silently never fires, so an
  * unrecognised expression is logged rather than quietly falling through to
@@ -23,8 +24,15 @@ import { bookIsSettled, settleExpiries } from "./orders/expiry.ts";
  */
 const SWEEP_CRON = "* * * * *";
 const NIGHTLY_CRON = "15 22 * * 1-5";
+const BACKUP_CRON = "*/5 * * * *";
 
 const app = new Hono<AppBindings>();
+
+// Private holdings and quotes must never be replayed by an HTTP cache.
+app.use("/api/*", async (c, next) => {
+  c.header("Cache-Control", "no-store");
+  await next();
+});
 
 /**
  * Every API route lives under /api. wrangler.jsonc routes exactly that prefix
@@ -60,7 +68,8 @@ export default {
   /**
    * Scheduled work (wrangler.jsonc `triggers.crons`).
    *
-   * Two schedules, doing three jobs.
+   * Three schedules: minute order sweeps, five-minute recovery checkpoints,
+   * and nightly universe/valuation work.
    *
    * The minute sweep turns a weekend queue into Monday's fills. The nightly
    * tick does the other two, and they are unrelated enough to be independent
@@ -71,6 +80,13 @@ export default {
    */
   async scheduled(event: ScheduledController, env: Env, ctx: ExecutionContext) {
     console.log(`Cron ${event.cron} fired at ${new Date(event.scheduledTime).toISOString()}`);
+
+    if (event.cron === BACKUP_CRON) {
+      ctx.waitUntil(backupSeason(env, (p) => ctx.waitUntil(p))
+        .then((result) => { if (result) console.log("Portfolio backup:", result); }));
+      // Let failures reject waitUntil so Cloudflare records a failed run.
+      return;
+    }
 
     // The minute-by-minute sweep. It ticks every minute of every day now that
     // crypto is tradable, and gates each order on its own asset class: a stock

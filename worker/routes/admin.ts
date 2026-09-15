@@ -8,6 +8,7 @@ import { forgetStandings } from "./leaderboard.ts";
 import { universeMeta } from "../market/universe.ts";
 import { exchangeDate } from "../market/provider.ts";
 import { backfillBenchmarks } from "../analytics/snapshot.ts";
+import { BACKUP_PREFIX } from "../analytics/backup.ts";
 
 /**
  * The officers' console.
@@ -26,6 +27,24 @@ import { backfillBenchmarks } from "../analytics/snapshot.ts";
 export const admin = new Hono<AuthedBindings>();
 
 admin.use("*", requireAuth, requireAdmin);
+
+/** Recovery exports include private pending orders, so only officers can read them. */
+admin.get("/backups", async (c) => {
+  const result = await c.env.QUOTES.list({ prefix: BACKUP_PREFIX, limit: 1000,
+    ...(c.req.query("cursor") ? { cursor: c.req.query("cursor") } : {}) });
+  return c.json({ backups: result.keys.sort((a, b) => b.name.localeCompare(a.name)),
+    cursor: result.list_complete ? null : result.cursor });
+});
+
+admin.get("/backups/:key", async (c) => {
+  const key = c.req.param("key");
+  if (!key.startsWith(BACKUP_PREFIX)) return c.json({ error: "Invalid backup key" }, 400);
+  const body = await c.env.QUOTES.get(key);
+  if (!body) return c.json({ error: "Backup not found or expired" }, 404);
+  c.header("Content-Type", "application/json");
+  c.header("Content-Disposition", 'attachment; filename="portfolio-backup.json"');
+  return c.body(body);
+});
 
 /** Club-wide fills shown for correction. Newest first; a season's worth is not. */
 const MAX_TRADES = 200;

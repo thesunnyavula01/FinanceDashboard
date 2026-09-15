@@ -1,5 +1,6 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, type Quote, type Security } from "@/lib/api";
+import { LAST_GOOD_QUOTES_KEY, rememberQuotes, retainQuotes } from "../lib/quote-continuity";
 
 /**
  * Live prices.
@@ -33,10 +34,19 @@ export interface QuotesState {
 
 export function useQuotes(symbols: string[], enabled = true): QuotesState {
   const key = cacheKey(symbols);
+  const client = useQueryClient();
 
   const { data, isPending, isError } = useQuery({
     queryKey: ["quotes", key],
-    queryFn: () => api.quotes(key),
+    queryFn: async ({ signal }) => {
+      const next = await api.quotes(key);
+      // A logout can clear the cache while the network request is in flight.
+      signal.throwIfAborted();
+      const previous = client.getQueryData<Record<string, Quote>>(LAST_GOOD_QUOTES_KEY) ?? {};
+      const retained = retainQuotes(key, next, previous);
+      rememberQuotes(client, { ...previous, ...retained.quotes });
+      return retained;
+    },
     enabled: enabled && key.length > 0,
     refetchInterval: QUOTE_REFRESH_MS,
     // Pause hidden tabs; the query refreshes stale prices when visible again.
@@ -48,8 +58,14 @@ export function useQuotes(symbols: string[], enabled = true): QuotesState {
     retry: 1,
   });
 
+  const saved = client.getQueryData<Record<string, Quote>>(LAST_GOOD_QUOTES_KEY) ?? {};
+  const displayed: Record<string, Quote> = {};
+  for (const symbol of key) {
+    const quote = data?.quotes[symbol] ?? saved[symbol];
+    if (quote) displayed[symbol] = isError || !data?.quotes[symbol] ? { ...quote, stale: true } : quote;
+  }
   return {
-    quotes: data?.quotes ?? {},
+    quotes: displayed,
     unknown: data?.unknown ?? [],
     asOf: data?.asOf ?? null,
     isLoading: isPending && key.length > 0,

@@ -97,12 +97,18 @@ test("the nightly job runs after the close, in either offset", () => {
  * with, which is the thing the old spacing was really protecting.
  */
 test("the sweep covers every day, because one of the markets never closes", () => {
-  const sweep = dispatched().find((cron) => cron.startsWith("*"));
+  const sweep = dispatched().find((cron) => cron === "* * * * *");
   assert.ok(sweep, "no sweep cron found");
 
   const [, hours, , , weekdays] = sweep.split(" ");
   assert.equal(hours, "*", `the sweep must cover every hour, not "${hours}" — crypto has no bell`);
   assert.equal(weekdays, "*", `the sweep must cover every day, not "${weekdays}"`);
+});
+
+test("portfolio backups run every five minutes including overnight and weekends", () => {
+  assert.ok(crons().includes("*/5 * * * *"));
+  assert.match(INDEX, /event\.cron === BACKUP_CRON/);
+  assert.match(INDEX, /ctx\.waitUntil\(backupSeason\(/);
 });
 
 test("the nightly job and the sweep are dispatched independently", () => {

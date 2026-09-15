@@ -35,7 +35,7 @@ export interface PortfolioState {
   atLastClose: boolean;
   isLoading: boolean;
   isError: boolean;
-  /** Prices failed; the grid is showing average costs, not marks. */
+  /** Some prices are saved or unavailable; the grid labels them individually. */
   pricesUnavailable: boolean;
   reservedCash: number;
 }
@@ -77,8 +77,9 @@ export function usePortfolio(): PortfolioState {
   // letting a member wonder why nothing is moving.
   const liveCount = symbols.filter((symbol) => quotes[symbol]).length;
   const atLastClose =
-    liveCount > 0 &&
+    liveCount > 0 && !quotesError &&
     symbols.every((symbol) => {
+      if (quotes[symbol]?.stale) return false;
       const source = quotes[symbol]?.source;
       return source === undefined || source === "bar" || source === "prev-bar";
     });
@@ -94,7 +95,7 @@ export function usePortfolio(): PortfolioState {
     atLastClose,
     isLoading: isPending,
     isError: portfolioError,
-    pricesUnavailable: symbols.length > 0 && (quotesError || symbols.some((symbol) => !quotes[symbol])),
+    pricesUnavailable: symbols.length > 0 && (quotesError || rows.some((row) => row.stale)),
     reservedCash,
   };
 }

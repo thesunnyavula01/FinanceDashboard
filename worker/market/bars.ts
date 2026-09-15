@@ -1,4 +1,4 @@
-import { alpacaFromEnv } from "./alpaca.ts";
+import { providerFromEnv } from "./router.ts";
 import type { DailyBar } from "./provider.ts";
 
 /**
@@ -50,7 +50,7 @@ function cacheKey(feed: string, symbol: string, start: string, end: string): str
 }
 
 function edgeKey(key: string): string {
-  return `https://bar-cache.invalid/v1/${key}`;
+  return `https://bar-cache.invalid/v2/${key}`;
 }
 
 async function readEdge(key: string): Promise<CacheEntry | null> {
@@ -132,7 +132,7 @@ export async function dailyBars(
 
   if (stillMissing.length === 0) return out;
 
-  const fetched = await alpacaFromEnv(env).dailyBars(stillMissing, { start, end });
+  const fetched = await providerFromEnv(env).dailyBars(stillMissing, { start, end });
   const writes: Promise<unknown>[] = [];
 
   for (const symbol of stillMissing) {

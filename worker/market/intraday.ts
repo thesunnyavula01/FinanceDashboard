@@ -1,4 +1,4 @@
-import { alpacaFromEnv } from "./alpaca.ts";
+import { providerFromEnv } from "./router.ts";
 import type { BarTimeframe, IntradayBar } from "./provider.ts";
 
 /**
@@ -65,7 +65,7 @@ function cacheKey(feed: string, timeframe: string, symbol: string, start: string
 }
 
 function edgeKey(key: string): string {
-  return `https://intraday-cache.invalid/v1/${key}`;
+  return `https://intraday-cache.invalid/v2/${key}`;
 }
 
 async function readEdge(key: string): Promise<CacheEntry | null> {
@@ -147,7 +147,7 @@ export async function intradayBars(
 
   // No `end`: the point of this chart is the bars that have just printed, and
   // naming an end instant would only invite an off-by-one against the clock.
-  const fetched = await alpacaFromEnv(env).intradayBars(stillMissing, {
+  const fetched = await providerFromEnv(env).intradayBars(stillMissing, {
     start,
     timeframe: INTRADAY_TIMEFRAME,
   });

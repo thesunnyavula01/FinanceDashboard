@@ -815,6 +815,14 @@ A newer observed price takes precedence over an older server backup. Saved
 prices retain their observation timestamps and show `Saved`; holdings with no
 price history show `Cost`. Authenticated responses are `no-store`.
 
+Production logs also exposed a second failure on the Positions chart: the daily
+and intraday bar caches still instantiated the equity-only provider. Any cold
+request containing `BTC/USD` made Alpaca reject the entire batch with HTTP 400
+(`invalid symbol`), losing SPY/QQQ's session axis too. Both caches now use the
+existing asset-class router, so stock, crypto and option history go to their own
+endpoints. Tests cover the actual cache entry points, mixed holdings and partial
+venue failures, rather than only the router in isolation.
+
 Only the display endpoint reads saved prices. The order engine continues to use
 the live quote cache. Backups never restore cash, holdings or trades automatically:
 a quote outage must not undo legitimate trades made since a checkpoint.

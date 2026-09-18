@@ -306,6 +306,31 @@ failures retry after the ordinary quote TTL, including in the edge cache. They
 must never suppress a recovered venue for five minutes. Alpaca requests have an
 eight-second timeout so a hung request cannot indefinitely block shared readers.
 
+**Tier 1 is bounded, and which caches need bounding depends on the key.** A
+`Map` with a TTL checked on read is not a cache: nothing ever deletes the
+expired entry, so the map only grows, and whether that matters is entirely a
+question of whether the key space repeats. For quotes it does — the key is a
+symbol and the club holds a few hundred. For the bar and chain caches it does
+not. `bars.ts` keys on `feed/symbol/start/end` and `end` is today, so **every
+symbol gets a fresh key every day**, each holding a season of daily bars;
+`intraday.ts` keys on a rolling six-day window; `chain.ts` keys on every
+underlying and every OCC symbol anybody has ever opened, at roughly two hundred
+contracts an entry. None of those is bounded by anything but how long the
+isolate happens to live.
+
+An isolate that crosses its memory ceiling is torn down along with the requests
+in flight on it, and that failure is not evenly spread: it lands on whoever
+shares the isolate that filled up, and it fills fastest while the market is live
+and every chart is polling — which is the shape of "it crashes for some people,
+during the session, for no reason". So those three use `BoundedCache` in
+`worker/lib/cache.ts`: insertion order is the eviction order and a read moves an
+entry to the back, which makes it an LRU, so SPY and QQQ stay hot while the long
+tail of keys nothing will ask for twice falls off. Callers still own freshness —
+they know their own TTL — and release a stale entry the moment they notice it,
+rather than letting it ride until the cap reaches it. The Cache API tier is
+untouched by any of this; it has no such limit, which is half of why it is tier
+2.
+
 Both providers live behind the interfaces in `worker/market/provider.ts`
 so switching to a paid feed later is a one-file change.
 
@@ -1128,6 +1153,20 @@ values positions against quotes for the member's own grid, so the detail panel
 reuses that rather than growing a second copy. Their resting orders are not in
 it and must not be.
 
+**Every money line here carries the contract multiplier, including the two that
+are not equity.** `marketValues()` applies it, so `equity`, `longMv`, `shortMv`
+and therefore `gross` are right for free — and that is exactly what makes the
+day figure and the largest holding easy to get wrong, because they are computed
+in their own loop beside it. A `top.marketValue` without the multiplier measures
+its own numerator in premiums and `gross`, its denominator, in dollars, so the
+weight is a hundredth of itself and a contract can never be reported as the
+largest position however large it is. The day figure has the same duty for a
+different reason: F1 prints the same holding's day P/L with the multiplier in,
+and two screens disagreeing about one number is the failure this codebase is
+written to prevent. It is only visible while the market is live, because it
+needs both a previous close and a current price, and only to the members holding
+a contract — which is why it wants a test rather than an eye.
+
 ### The bar is the screen
 
 Every member's return on one shared axis, with SPY drawn through it as a
@@ -1207,6 +1246,18 @@ Bloomberg-terminal density, amber on true black. Dense beats airy everywhere.
   and `SCREENS` keys are static literals matched against `event.key`, so the
   command bar's key lookup would answer differently per member too.
 - Slash key focuses the command bar. Keyboard-first order entry.
+
+**The screen fails, not the terminal.** React unmounts the whole tree when a
+render throws and nothing catches it, so before `ErrorBoundary` existed one bad
+field in one payload took the status rail, the function keys and the command bar
+down with the panel that read it — a black page a member cannot tell from the
+app being down and cannot navigate off. The boundary therefore sits *inside* the
+shell and around the routed screen, keyed on the path so walking to another
+screen clears it. The chrome is what it exists to keep, so the chrome stays
+outside it, and `scripts/leaderboard-render.test.ts` reads `App.tsx` and fails
+the build if that inverts. It is a backstop and not a licence: a screen still
+owes its own optional reads, because a panel that draws thin beats one that
+draws an apology.
 
 **Order entry is two presses, not one.** Review Order, then Place Order, with
 the order frozen on a panel in between — the way a real brokerage ticket works.

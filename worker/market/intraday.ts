@@ -1,4 +1,5 @@
 import { providerFromEnv } from "./router.ts";
+import { BoundedCache } from "../lib/cache.ts";
 import type { BarTimeframe, IntradayBar } from "./provider.ts";
 
 /**
@@ -58,7 +59,16 @@ interface CacheEntry {
   cachedAt: number;
 }
 
-const memory = new Map<string, CacheEntry>();
+/**
+ * How many symbol-sessions the isolate keeps.
+ *
+ * The key carries a start date that rolls forward every day, so the old keys
+ * are dead the moment the date changes and nothing ever reads them again. Each
+ * entry is a few hundred five-minute bars. See `worker/lib/cache.ts`.
+ */
+export const MAX_MEMORY_ENTRIES = 400;
+
+const memory = new BoundedCache<CacheEntry>(MAX_MEMORY_ENTRIES);
 
 function cacheKey(feed: string, timeframe: string, symbol: string, start: string): string {
   return `${feed}/${timeframe}/${symbol}/${start}`;
@@ -124,8 +134,15 @@ export async function intradayBars(
 
   for (const symbol of wanted) {
     const entry = memory.get(key(symbol));
-    if (entry && now - entry.cachedAt < TTL_MS) out.set(symbol, entry.bars);
-    else missing.push(symbol);
+    if (entry && now - entry.cachedAt < TTL_MS) {
+      out.set(symbol, entry.bars);
+    } else {
+      // A sixty-second TTL means most reads find a stale entry, so dropping it
+      // here is what keeps yesterday's window from riding along until the cap
+      // pushes it out.
+      if (entry) memory.delete(key(symbol));
+      missing.push(symbol);
+    }
   }
 
   const stillMissing: string[] = [];
@@ -179,4 +196,9 @@ export async function intradayBars(
 /** Drops the in-memory tier. Tests only. */
 export function forgetIntraday(): void {
   memory.clear();
+}
+
+/** How many sessions the isolate is holding. Tests only. */
+export function intradayMemorySize(): number {
+  return memory.size;
 }

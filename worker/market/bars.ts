@@ -1,4 +1,5 @@
 import { providerFromEnv } from "./router.ts";
+import { BoundedCache } from "../lib/cache.ts";
 import type { DailyBar } from "./provider.ts";
 
 /**
@@ -43,7 +44,19 @@ interface CacheEntry {
   cachedAt: number;
 }
 
-const memory = new Map<string, CacheEntry>();
+/**
+ * How many symbol-series the isolate keeps.
+ *
+ * The key carries the window — `feed/symbol/start/end`, with `end` being today
+ * — so a new set of keys appears every day and the old ones are never asked for
+ * again. Unbounded, that is a season of daily bars per symbol per day held for
+ * the life of the isolate; bounded, it is a couple of hundred series, which
+ * comfortably covers a club's holdings plus both benchmarks on every range tab
+ * anyone has open. See `worker/lib/cache.ts`.
+ */
+export const MAX_MEMORY_ENTRIES = 400;
+
+const memory = new BoundedCache<CacheEntry>(MAX_MEMORY_ENTRIES);
 
 function cacheKey(feed: string, symbol: string, start: string, end: string): string {
   return `${feed}/${symbol}/${start}/${end}`;
@@ -108,9 +121,17 @@ export async function dailyBars(
   const missing: string[] = [];
 
   for (const symbol of wanted) {
-    const entry = memory.get(cacheKey(feed, symbol, start, end));
-    if (entry && now - entry.cachedAt < TTL_MS) out.set(symbol, entry.bars);
-    else missing.push(symbol);
+    const key = cacheKey(feed, symbol, start, end);
+    const entry = memory.get(key);
+    if (entry && now - entry.cachedAt < TTL_MS) {
+      out.set(symbol, entry.bars);
+    } else {
+      // Dropped rather than left to age out of the cap: a stale entry that is
+      // never asked for again would otherwise hold a season of bars until it
+      // was evicted by four hundred newer keys.
+      if (entry) memory.delete(key);
+      missing.push(symbol);
+    }
   }
 
   const stillMissing: string[] = [];
@@ -160,4 +181,9 @@ export async function dailyBars(
 /** Drops the in-memory tier. Tests only. */
 export function forgetBars(): void {
   memory.clear();
+}
+
+/** How many series the isolate is holding. Tests only. */
+export function barMemorySize(): number {
+  return memory.size;
 }

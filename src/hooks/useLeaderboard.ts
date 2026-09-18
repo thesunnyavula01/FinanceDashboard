@@ -39,8 +39,13 @@ export function useStandings(userId: string | undefined): StandingsState {
     retry: 1,
   });
 
+  // `?? []` and not `data?.rows.find(...)`. This screen is the one read whose
+  // payload is assembled from five upstreams and memoised across the club, so
+  // a partial body reaches everybody at once — and a `.find` on a missing
+  // `rows` throws during render, which without a boundary blanked the whole
+  // terminal rather than this panel.
   const mine = useMemo(
-    () => data?.rows.find((row) => row.userId === userId) ?? null,
+    () => (data?.rows ?? []).find((row) => row.userId === userId) ?? null,
     [data, userId],
   );
 

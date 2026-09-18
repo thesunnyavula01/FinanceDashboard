@@ -7,7 +7,7 @@ import { StatStrip, type Stat } from "@/components/terminal/StatStrip";
 import { Value } from "@/components/terminal/Value";
 import { useStandings } from "@/hooks/useLeaderboard";
 import { useAuth } from "@/lib/auth";
-import { clockET, compact, money, moneySigned, percent, signColor } from "@/lib/format";
+import { clockET, compact, money, moneySigned, percent, signColor, weight } from "@/lib/format";
 import type { StandingsRow } from "@/lib/api";
 
 /**
@@ -29,8 +29,24 @@ export function Leaderboard() {
 
   const rows = standings?.rows ?? [];
   const summary = standings?.summary;
-  const spy = standings?.benchmarks.spy ?? null;
-  const qqq = standings?.benchmarks.qqq ?? null;
+  // Every read of the payload below is optional, and that is not defensiveness
+  // for its own sake: this is the one response in the app built out of a
+  // database read, a batched quote fetch and two bar series, memoised per
+  // season and served to the whole club. A field that goes missing goes missing
+  // for everybody at once, and a throw here used to take the entire terminal
+  // down rather than this one panel.
+  const spy = standings?.benchmarks?.spy ?? null;
+  const qqq = standings?.benchmarks?.qqq ?? null;
+
+  // "since Jan 5", or nothing at all. The non-null assertion this replaces was
+  // the only thing standing between a payload without a season on it and a
+  // blank terminal.
+  const startsAt = standings?.season?.startsAt;
+  const started = startsAt === undefined ? null : new Date(startsAt);
+  const seasonStarted =
+    started && !Number.isNaN(started.getTime())
+      ? started.toLocaleDateString("en-US", { month: "short", day: "numeric" })
+      : null;
 
   // One axis for the whole table, including the benchmarks, so every bar is
   // measured against the same ruler and the SPY hairline lands in the same
@@ -158,7 +174,10 @@ export function Leaderboard() {
                 S
               </span>
             )}
-            <span className="num text-ink-faint">{r.top.weight.toFixed(0)}%</span>
+            {/* `weight()` parses at the edge, where every other figure in this
+                app is parsed, rather than calling `toFixed` on a number the
+                wire is only assumed to have sent. */}
+            <span className="num text-ink-faint">{weight(r.top.weight, 0)}</span>
           </span>
         ) : (
           <span className="text-ink-faint">All cash</span>
@@ -277,7 +296,7 @@ export function Leaderboard() {
     <div className="flex min-h-full flex-col md:h-full">
       <StatStrip stats={stats} />
 
-      {standings?.season.tradingLocked && (
+      {standings?.season?.tradingLocked && (
         <div
           role="status"
           className="shrink-0 border-b border-accent-dim bg-accent-wash px-3 py-1.5 sm:flex sm:items-baseline sm:gap-2"
@@ -303,11 +322,8 @@ export function Leaderboard() {
                 ) : (
                   <>
                     <span className="text-ink-dim">
-                      {rows.length} member{rows.length === 1 ? "" : "s"} since{" "}
-                      {new Date(standings!.season.startsAt).toLocaleDateString("en-US", {
-                        month: "short",
-                        day: "numeric",
-                      })}
+                      {rows.length} member{rows.length === 1 ? "" : "s"}
+                      {seasonStarted && ` since ${seasonStarted}`}
                     </span>
                     <span className="hidden text-ink-faint sm:inline">·</span>
                     {/* The legend for the bar. It is the first thing to go on

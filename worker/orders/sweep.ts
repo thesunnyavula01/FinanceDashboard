@@ -172,10 +172,19 @@ export async function sweepRestingOrders(
   // Positions of every affected portfolio, so place_order() can be handed marks
   // for the Reg T check rather than falling back to average cost.
   const portfolioIds = [...new Set(tradable.map((o) => o.portfolio_id))];
-  const { data: positionRows } = await supabase
+  const { data: positionRows, error: positionsError } = await supabase
     .from("positions")
     .select("portfolio_id, symbol, qty")
     .in("portfolio_id", portfolioIds);
+
+  // Not fatal, and deliberately not silent. Without these rows `p_marks` carries
+  // only the symbol being filled, so place_order() margins every other short at
+  // what it was sold for — understating the requirement on exactly the position
+  // that has moved against the member. The sweep still runs; the log line is
+  // what makes an odd fill explainable afterwards.
+  if (positionsError) {
+    console.error("Sweep could not read positions for marks:", positionsError);
+  }
 
   const positionsByPortfolio = new Map<string, string[]>();
   for (const row of positionRows ?? []) {

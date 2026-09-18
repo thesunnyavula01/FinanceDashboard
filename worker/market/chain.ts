@@ -1,5 +1,6 @@
 import { providerFromEnv, type RouterEnv } from "./router.ts";
 import { quoteCache } from "./quotes.ts";
+import { BoundedCache } from "../lib/cache.ts";
 import type { ChainQuote } from "./options.ts";
 
 /**
@@ -37,7 +38,18 @@ interface Entry<T> {
   cachedAt: number;
 }
 
-const memory = new Map<string, Entry<unknown>>();
+/**
+ * How many chain entries the isolate keeps.
+ *
+ * The key space here is every underlying anybody browses and every OCC symbol
+ * anybody orders, and a priced expiration is a couple of hundred contracts. An
+ * afternoon of the club shopping the chain is a long tail of keys that are read
+ * once and never again, which is the case a cap exists for. See
+ * `worker/lib/cache.ts`.
+ */
+const MAX_MEMORY_ENTRIES = 300;
+
+const memory = new BoundedCache<Entry<unknown>>(MAX_MEMORY_ENTRIES);
 
 function edgeKey(key: string): string {
   return `https://chain-cache.invalid/v1/${encodeURIComponent(key)}`;
@@ -46,6 +58,9 @@ function edgeKey(key: string): string {
 async function readEdge<T>(key: string, ttl: number, now: number): Promise<T | null> {
   const hot = memory.get(key) as Entry<T> | undefined;
   if (hot && now - hot.cachedAt < ttl) return hot.value;
+  // A twenty-second chain goes stale between two members looking at it, so an
+  // expired entry is dropped rather than carried until the cap reaches it.
+  if (hot) memory.delete(key);
 
   if (typeof caches === "undefined") return null;
   try {

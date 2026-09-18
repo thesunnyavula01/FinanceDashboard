@@ -205,3 +205,59 @@ test("benchmarkMove reads the window's first close, and prefers a live mark", ()
 function round2(value: number): number {
   return Number(value.toFixed(2));
 }
+
+/**
+ * An option contract is a hundred shares, and every money line on this screen
+ * has to carry that.
+ *
+ * `gross` comes out of marketValues(), which applies the multiplier — so a
+ * `top` computed without it measured its numerator in premiums and its
+ * denominator in dollars, and the day figure came out a hundredth of the one
+ * F1 prints for the same holding. It is only visible while the market is live,
+ * because it needs a previous close and a current price, and only to members
+ * who hold a contract.
+ */
+test("a contract is valued at a hundred shares on the standings, exactly as it is on F1", () => {
+  const contract = "AAPL261218C00150000";
+  const row = rankClub(
+    [
+      member("Ada", 50_000, [
+        // Two contracts at a 5.25 premium, now 6.25, against a 5.75 close.
+        { symbol: contract, qty: 2, avgCost: 5.25, multiplier: 100 },
+        { symbol: "MSFT", qty: 10, avgCost: 400 },
+      ]),
+    ],
+    marks({ [contract]: [6.25, 5.75], MSFT: [400, 400] }),
+    null,
+  ).rows[0]!;
+
+  // 2 x 100 x 6.25 = 1,250 of contracts against 4,000 of stock.
+  assert.equal(row.longMv, 1_250 + 4_000);
+  assert.equal(row.equity, 55_250);
+  // (6.25 - 5.75) x 2 x 100. Without the multiplier this read $1.
+  assert.equal(row.dayPnl, 100);
+  assert.equal(row.top?.symbol, "MSFT");
+  assert.equal(row.top?.marketValue, 4_000);
+  // The stock is 4,000 of 5,250 gross. A contract weighed in bare premiums put
+  // both sides of this fraction in different units.
+  assert.equal(row.top?.weight, 76.19);
+});
+
+test("a contract large enough to be the biggest holding is reported as the biggest holding", () => {
+  const contract = "NVDA261218C00100000";
+  const row = rankClub(
+    [
+      member("Bea", 10_000, [
+        { symbol: contract, qty: 20, avgCost: 8, multiplier: 100 },
+        { symbol: "F", qty: 100, avgCost: 12 },
+      ]),
+    ],
+    marks({ [contract]: [10, 10], F: [12, 12] }),
+    null,
+  ).rows[0]!;
+
+  // 20 x 100 x 10 = 20,000 against 1,200 of stock. Read as bare premiums the
+  // contract came to 200 and the smaller position won.
+  assert.equal(row.top?.symbol, contract);
+  assert.equal(row.top?.marketValue, 20_000);
+});

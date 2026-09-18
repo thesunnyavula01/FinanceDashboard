@@ -1,4 +1,4 @@
-import { marketValues, round, type Position } from "../orders/engine.ts";
+import { contractSize, marketValues, round, type Position } from "../orders/engine.ts";
 
 /**
  * Ranking the club.
@@ -160,14 +160,23 @@ function valueMember(
     const price = prices[position.symbol] ?? position.avgCost;
     if (!mark) unpriced += 1;
 
+    // One contract is a hundred shares, and every money line below has to carry
+    // that. `gross` comes out of marketValues(), which already does — so
+    // omitting it here does not merely understate a contract by a hundredfold,
+    // it measures the numerator and the denominator of `weight` in two
+    // different units. The day figure has the same duty: F1 prints the same
+    // holding's day P/L with the multiplier in, and two screens disagreeing
+    // about one number is the failure this codebase is written to prevent.
+    const size = contractSize(position);
+
     // No previous close means no day to measure against, and zero is the honest
     // answer — the alternative is the position's whole P/L wearing a day's
     // clothes.
     if (mark?.prevClose != null && mark.prevClose > 0) {
-      dayPnl += (price - mark.prevClose) * position.qty;
+      dayPnl += (price - mark.prevClose) * position.qty * size;
     }
 
-    const marketValue = position.qty * price;
+    const marketValue = position.qty * size * price;
     if (!top || Math.abs(marketValue) > Math.abs(top.marketValue)) {
       top = {
         symbol: position.symbol,

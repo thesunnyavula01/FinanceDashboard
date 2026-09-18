@@ -324,6 +324,13 @@ export function replayIntraday({
       cursor += 1;
       cash += cashDelta(fill);
       held.set(fill.symbol, (held.get(fill.symbol) ?? 0) + qtyDelta(fill));
+      // The same line the pre-session pass runs, and it has to be here too: a
+      // contract bought *this* session would otherwise never record its size
+      // and be valued at one share instead of a hundred — the premium leaves
+      // cash in full and comes back as a hundredth of a position, so the line
+      // steps down at the moment of the fill and stays there all day. F1 opens
+      // on 1D, which makes this the default screen rather than a corner of one.
+      sizeOf.set(fill.symbol, fillMultiplier(fill));
       if (!lastPrice.has(fill.symbol)) lastPrice.set(fill.symbol, fill.price);
     }
 

@@ -430,3 +430,83 @@ test("a fill from after the session on screen is not drawn into it", () => {
     [100_000, 100_000, 100_000],
   );
 });
+
+/**
+ * A contract bought during the session being drawn.
+ *
+ * The pre-session pass recorded each symbol's contract size and the
+ * during-session one did not, so a call bought this morning was valued at one
+ * share instead of a hundred: the premium left cash in full and came back as a
+ * hundredth of a position, putting a step down in the line at the moment of the
+ * fill that stayed there for the rest of the day. F1 opens on 1D, so this was
+ * the default screen rather than a corner of one.
+ */
+test("a contract bought during the session is worth a hundred shares from the fill onward", () => {
+  const contract = "AAPL261218C00150000";
+  const { base, points } = replayIntraday({
+    stamps: STAMPS,
+    sessionDate: "2026-03-04",
+    trades: [
+      {
+        symbol: contract,
+        side: "BUY",
+        qty: 2,
+        price: 5,
+        // 2 contracts x 100 shares x $5 of premium.
+        notional: 1_000,
+        multiplier: 100,
+        executedAt: "2026-03-04T14:35:00Z",
+      },
+    ],
+    startingCash: 100_000,
+    // The premium is unchanged all session, so the only thing that can move the
+    // line is the arithmetic.
+    prices: new Map([[contract, new Map(STAMPS.map((stamp) => [stamp, 5]))]]),
+    prevCloses: new Map(),
+  });
+
+  // Nothing was held before the bell, so the day opens at the starting cash.
+  assert.equal(base, 100_000);
+  assert.deepEqual(
+    points.map((p) => p.equity),
+    // Paid $1,000, holding $1,000 of contracts: flat. Sized at 1 it read
+    // 99,010 from the fill onward — a $990 loss the member never took.
+    [100_000, 100_000, 100_000],
+  );
+});
+
+test("a contract bought before the session and one bought during it are valued the same way", () => {
+  const contract = "AAPL261218C00150000";
+  const bought = (executedAt: string) => ({
+    symbol: contract,
+    side: "BUY" as const,
+    qty: 1,
+    price: 4,
+    notional: 400,
+    multiplier: 100,
+    executedAt,
+  });
+
+  const during = replayIntraday({
+    stamps: STAMPS,
+    sessionDate: "2026-03-04",
+    trades: [bought("2026-03-04T14:30:00Z")],
+    startingCash: 50_000,
+    prices: new Map([[contract, new Map([[STAMPS[2]!, 6]])]]),
+    prevCloses: new Map(),
+  });
+
+  // Same contract, same mark, bought the session before and carried in.
+  const before = replayIntraday({
+    stamps: STAMPS,
+    sessionDate: "2026-03-04",
+    trades: [bought("2026-03-03T14:30:00Z")],
+    startingCash: 50_000,
+    prices: new Map([[contract, new Map([[STAMPS[2]!, 6]])]]),
+    prevCloses: new Map([[contract, 4]]),
+  });
+
+  assert.equal(during.points.at(-1)!.equity, before.points.at(-1)!.equity);
+  // 50,000 - 400 paid + 1 x 100 x 6 held.
+  assert.equal(during.points.at(-1)!.equity, 50_200);
+});

@@ -90,8 +90,17 @@ const timeET = new Intl.DateTimeFormat("en-US", {
   hour12: false,
 });
 
-/** Market time. The exchange runs on New York time, so the terminal does too. */
+/**
+ * Market time. The exchange runs on New York time, so the terminal does too.
+ *
+ * Guarded the same way `stampET` is, and for a reason worth stating: every
+ * caller here passes `new Date(someApiTimestamp)`, and `Intl.DateTimeFormat`
+ * *throws* on an invalid date rather than printing "Invalid Date" the way
+ * `toLocaleString` does. One malformed `asOf` would therefore take down the
+ * whole screen it was a footnote on.
+ */
 export function clockET(date: Date = new Date()): string {
+  if (Number.isNaN(date.getTime())) return "—";
   return timeET.format(date);
 }
 

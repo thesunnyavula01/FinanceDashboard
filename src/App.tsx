@@ -1,7 +1,8 @@
-import { Route, Routes } from "react-router-dom";
+import { Route, Routes, useLocation } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
+import { ErrorBoundary } from "@/components/terminal/ErrorBoundary";
 import { StatusRail } from "@/components/terminal/StatusRail";
 import { FunctionNav } from "@/components/terminal/FunctionNav";
 import { CommandBar } from "@/components/terminal/CommandBar";
@@ -17,6 +18,7 @@ import { NotFound } from "@/routes/NotFound";
 
 export function App() {
   const { session, loading, signOut } = useAuth();
+  const location = useLocation();
 
   // Doubles as the SPA-to-Worker heartbeat: if this query fails, the rail
   // reports the API as unreachable instead of showing a stale session state.
@@ -72,18 +74,27 @@ export function App() {
 
       <FunctionNav isAdmin={me?.role === "admin"} />
 
+      {/*
+        The boundary is inside the shell and outside the screen, which is the
+        only placement that keeps a render fault from taking the status rail,
+        the function keys and the command bar with it. Keyed on the path so
+        walking to another screen clears a tripped boundary rather than
+        carrying it.
+      */}
       <main className="min-h-0 flex-1 overflow-auto">
-        <Routes>
-          <Route path="/" element={<Positions />} />
-          <Route path="/trade" element={<Trade />} />
-          <Route path="/leaderboard" element={<Leaderboard />} />
-          <Route path="/research" element={<Research />} />
-          <Route path="/sectors" element={<Sectors />} />
-          <Route path="/admin" element={<Admin />} />
-          <Route path="/legal" element={<Legal />} />
-          <Route path="/legal/:doc" element={<Legal />} />
-          <Route path="*" element={<NotFound />} />
-        </Routes>
+        <ErrorBoundary key={location.pathname}>
+          <Routes>
+            <Route path="/" element={<Positions />} />
+            <Route path="/trade" element={<Trade />} />
+            <Route path="/leaderboard" element={<Leaderboard />} />
+            <Route path="/research" element={<Research />} />
+            <Route path="/sectors" element={<Sectors />} />
+            <Route path="/admin" element={<Admin />} />
+            <Route path="/legal" element={<Legal />} />
+            <Route path="/legal/:doc" element={<Legal />} />
+            <Route path="*" element={<NotFound />} />
+          </Routes>
+        </ErrorBoundary>
       </main>
 
       <CommandBar isAdmin={me?.role === "admin"} />

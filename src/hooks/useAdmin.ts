@@ -112,6 +112,11 @@ export function useResetSeason() {
   );
 }
 
+/** Fund every member who has no portfolio in the season. Idempotent. */
+export function useFundMissingMembers() {
+  return useAdminMutation((seasonId: string) => api.admin.fundMissingMembers(seasonId));
+}
+
 export function useRotateInvite() {
   return useAdminMutation((code?: string) => api.admin.rotateInvite(code));
 }

@@ -95,6 +95,31 @@ export function DataGrid<T>({
     });
   }, [rows, columns, sortKey, dir]);
 
+  /**
+   * One key per row, guaranteed distinct.
+   *
+   * React renders only the **last** of two siblings that share a key, silently
+   * — no error, no gap, just a row fewer than the data has. On a leaderboard
+   * that is a member who has been deleted for no reason, and it is invisible
+   * from the server: `renderToStaticMarkup` is a single pass with no
+   * reconciliation, so it draws both and the test suite sees nothing wrong.
+   *
+   * Eight grids in this app hand in their own `rowKey`, and every one of them
+   * is an assertion about uniqueness made somewhere else — a database
+   * constraint, a symbol that happens not to repeat in one member's book. This
+   * is the one place that can make it true rather than assume it, so a
+   * collision costs a wasted re-render and never a row.
+   */
+  const keyed = useMemo(() => {
+    const seen = new Set<string>();
+    return sorted.map((row, index) => {
+      const raw = rowKey(row);
+      const key = raw && !seen.has(raw) ? raw : `${raw ?? ""}#${index}`;
+      seen.add(key);
+      return { row, key };
+    });
+  }, [sorted, rowKey]);
+
   function toggleSort(col: Column<T>) {
     if (!col.sortValue) return;
     if (col.key === sortKey) {
@@ -159,8 +184,7 @@ export function DataGrid<T>({
           </tr>
         </thead>
         <tbody>
-          {sorted.map((row) => {
-            const key = rowKey(row);
+          {keyed.map(({ row, key }) => {
             const selected = selectedKey !== undefined && key === selectedKey;
 
             return (

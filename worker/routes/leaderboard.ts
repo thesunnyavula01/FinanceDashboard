@@ -49,6 +49,12 @@ const MAX_PORTFOLIOS = 500;
 /** Fills shown on a member's detail panel. A season's worth is not the point. */
 const DETAIL_TRADES = 50;
 
+/** A member of the club who is not in the standings, and why. */
+export interface UnrankedMember {
+  userId: string;
+  displayName: string;
+}
+
 interface Standings {
   season: { id: string; name: string; startsAt: string; tradingLocked: boolean };
   rows: ReturnType<typeof rankClub>["rows"];
@@ -57,6 +63,25 @@ interface Standings {
   benchmarks: { spy: number | null; qqq: number | null };
   /** Positions across the club that nothing could price. */
   unpriced: number;
+  /**
+   * Members of the club with no portfolio in this season.
+   *
+   * A member is in the standings if and only if they hold a portfolio in the
+   * active season — `loadClub()` reads `portfolios` filtered by `season_id`, so
+   * somebody without one is not a row that renders badly, they are not a row.
+   * Reported rather than left to be noticed, because "a member vanished" and
+   * "the club is one member smaller" look identical on a screen that only ever
+   * shows what it found. An officer repairs it from the console; migration 0008
+   * closes the race that was creating it.
+   */
+  missing: UnrankedMember[];
+  /**
+   * The season holds more portfolios than one query returns.
+   *
+   * Never true for a club of 30-100, and it says so rather than quietly ranking
+   * whichever five hundred Postgres handed back first.
+   */
+  truncated: boolean;
   asOf: string;
   note?: string;
 }
@@ -186,7 +211,7 @@ async function buildStandings(
   season: Season,
   waitUntil: (promise: Promise<unknown>) => void,
 ): Promise<Standings> {
-  const portfolios = await loadClub(supabase, season.id);
+  const { portfolios, missing, truncated } = await loadClub(supabase, season.id);
 
   const held = [...new Set(portfolios.flatMap((p) => p.positions.map((pos) => pos.symbol)))];
   const symbols = [...new Set([...held, ...BENCHMARKS])];
@@ -217,30 +242,52 @@ async function buildStandings(
     summary,
     benchmarks,
     unpriced: rows.reduce((sum, row) => sum + row.unpriced, 0),
+    missing,
+    truncated,
     asOf: new Date().toISOString(),
   };
 }
 
 /**
- * Every portfolio in the season, with its owner and its holdings.
+ * Every portfolio in the season, with its owner and its holdings — and every
+ * member who has no portfolio in it.
  *
  * One embedded select rather than three round trips. A hundred members holding
  * ten positions each is a thousand small rows, which is one modest response —
  * and it is read once per quote interval for the whole club, not once per
  * member.
+ *
+ * **The roster is read alongside it, and that second query is the point.** The
+ * standings are built from `portfolios`, so a member with no portfolio in this
+ * season produces no row — and a screen assembled only from what it found
+ * cannot tell "the club is one member smaller" from "a member disappeared". So
+ * the club is read from `profiles`, which is the list of who is actually in it,
+ * and anybody on that list without a portfolio is reported rather than omitted.
+ * It costs one small indexed read per twenty-second memo for the whole club.
+ *
+ * Ordered by id, so if the cap ever did bite, *which* portfolios came back
+ * would at least be stable between polls rather than a member blinking in and
+ * out with whatever plan Postgres chose. `truncated` is what says it bit.
  */
-async function loadClub(supabase: SupabaseClient, seasonId: string): Promise<ClubPortfolio[]> {
-  const { data, error } = await supabase
-    .from("portfolios")
-    .select(
-      "id, user_id, cash, starting_cash, profiles(display_name, role), positions(symbol, qty, avg_cost, multiplier)",
-    )
-    .eq("season_id", seasonId)
-    .limit(MAX_PORTFOLIOS);
+async function loadClub(
+  supabase: SupabaseClient,
+  seasonId: string,
+): Promise<{ portfolios: ClubPortfolio[]; missing: UnrankedMember[]; truncated: boolean }> {
+  const [{ data, error }, { data: roster, error: rosterError }] = await Promise.all([
+    supabase
+      .from("portfolios")
+      .select(
+        "id, user_id, cash, starting_cash, profiles(display_name, role), positions(symbol, qty, avg_cost, multiplier)",
+      )
+      .eq("season_id", seasonId)
+      .order("id")
+      .limit(MAX_PORTFOLIOS),
+    supabase.from("profiles").select("id, display_name").order("created_at"),
+  ]);
 
   if (error) throw error;
 
-  return (data ?? []).map((row) => {
+  const portfolios = (data ?? []).map((row) => {
     const profile = profileOf(row);
     return {
       portfolioId: row.id as string,
@@ -257,6 +304,23 @@ async function loadClub(supabase: SupabaseClient, seasonId: string): Promise<Clu
       })),
     };
   });
+
+  // A failed roster read is not a failed leaderboard. It costs the club the
+  // explanation, not the standings, so it is logged and reported as "nobody
+  // missing" — which is what the screen showed before this query existed.
+  if (rosterError) {
+    console.error("Club roster unavailable, so missing members cannot be named:", rosterError);
+  }
+
+  const ranked = new Set(portfolios.map((portfolio) => portfolio.userId));
+  const missing: UnrankedMember[] = (roster ?? [])
+    .filter((profile) => !ranked.has(profile.id as string))
+    .map((profile) => ({
+      userId: profile.id as string,
+      displayName: (profile.display_name as string | null) ?? "Unknown member",
+    }));
+
+  return { portfolios, missing, truncated: portfolios.length >= MAX_PORTFOLIOS };
 }
 
 /**
@@ -335,6 +399,8 @@ function emptyStandings(note: string): Standings {
     },
     benchmarks: { spy: null, qqq: null },
     unpriced: 0,
+    missing: [],
+    truncated: false,
     asOf: new Date().toISOString(),
     note,
   };

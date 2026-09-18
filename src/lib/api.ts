@@ -635,6 +635,12 @@ export interface ClubSummary {
   totalEquity: number;
 }
 
+/** Somebody in the club who is not in the standings. */
+export interface UnrankedMember {
+  userId: string;
+  displayName: string;
+}
+
 export interface StandingsResponse {
   season: { id: string; name: string; startsAt: string; tradingLocked: boolean };
   rows: StandingsRow[];
@@ -642,6 +648,15 @@ export interface StandingsResponse {
   /** Each benchmark's move over the same window the members are measured on. */
   benchmarks: { spy: number | null; qqq: number | null };
   unpriced: number;
+  /**
+   * Members with no portfolio in this season, and therefore no row.
+   *
+   * Named rather than left out, because a screen built only from what it found
+   * cannot tell "the club is one member smaller" from "a member vanished".
+   */
+  missing?: UnrankedMember[];
+  /** The season holds more portfolios than one query returns. */
+  truncated?: boolean;
   asOf: string;
   /** Why there is nothing to rank, when there is not. Shown as-is. */
   note?: string;
@@ -852,6 +867,19 @@ export const api = {
       request<{ ok: true; portfolios: number; tradesDeleted: number; positionsDeleted: number }>(
         `/admin/seasons/${encodeURIComponent(id)}/reset`,
         { authed: true, method: "POST", body: JSON.stringify({ confirm }) },
+      ),
+
+    /**
+     * Give a portfolio to every member who has none in this season.
+     *
+     * The repair for a member who is not on the leaderboard at all. Safe to
+     * press twice: the insert behind it skips anybody who already has one, so
+     * it can add a missing row and never overwrite a balance.
+     */
+    fundMissingMembers: (seasonId: string) =>
+      request<{ ok: true; created: number; members: number }>(
+        `/admin/seasons/${encodeURIComponent(seasonId)}/portfolios`,
+        { authed: true, method: "POST" },
       ),
 
     /** Rotate the invite code. Omit `code` to have one generated. */

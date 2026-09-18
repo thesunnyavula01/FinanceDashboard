@@ -371,6 +371,66 @@ admin.post("/seasons/:id/reset", async (c) => {
 });
 
 /**
+ * POST /api/admin/seasons/:id/portfolios — fund members who have none.
+ *
+ * The repair for the one way a member disappears. A member is in the standings
+ * if and only if they hold a portfolio in the active season, so somebody
+ * without one is not a row that renders badly — they are not a row, and before
+ * this there was no way back: portfolios were created at signup and at
+ * rollover, and a member who fell between the two stayed off the board until an
+ * officer wrote SQL by hand. Migration 0008 closes the race that put them
+ * there; this is what recovers the ones it already caught.
+ *
+ * Not armed, and not a destructive operation dressed as a safe one: the RPC's
+ * insert is `on conflict do nothing`, so a member who already has a portfolio
+ * is untouched, cash and all. Pressing it twice does nothing the first press
+ * did not, which is exactly the property that makes it a single click.
+ *
+ * It funds at the season's current starting cash and stamps it on the
+ * portfolio, so the repaired member is measured against their own baseline like
+ * everybody else — see migration 0005 on why that figure lives where it does.
+ */
+admin.post("/seasons/:id/portfolios", async (c) => {
+  let supabase: SupabaseClient;
+  try {
+    supabase = serviceClient(c.env);
+  } catch (err) {
+    if (err instanceof ConfigError) return c.json({ error: err.message }, 503);
+    throw err;
+  }
+
+  const { data, error } = await supabase.rpc("ensure_season_portfolios", {
+    p_season_id: c.req.param("id"),
+  });
+
+  if (error) {
+    // Until 0008 is pasted into the SQL editor the function does not exist, and
+    // "Could not fund them" would send an officer looking for a fault in the
+    // club rather than in the deploy. Migrations are applied by hand here.
+    if (error.code === "PGRST202") {
+      return c.json(
+        {
+          error:
+            "This needs migration 0008 applied. Paste supabase/migrations/0008_membership.sql into the Supabase SQL editor and press Run.",
+          code: "MIGRATION_REQUIRED",
+        },
+        503,
+      );
+    }
+    return c.json(...describeRpcError(error, "Could not fund the missing members."));
+  }
+
+  invalidate();
+  const row = Array.isArray(data) ? data[0] : data;
+
+  return c.json({
+    ok: true,
+    created: Number(row?.created ?? 0),
+    members: Number(row?.members ?? 0),
+  });
+});
+
+/**
  * POST /api/admin/invite — rotate the code.
  *
  * Send a code to set a specific one, or nothing to have one generated. The old

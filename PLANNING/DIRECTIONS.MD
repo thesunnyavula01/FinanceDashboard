@@ -723,6 +723,18 @@ runner wired up and no direct Postgres connection string in the environment, so
 Applied so far: `0001_init.sql`, `0002_trading.sql`, `0003_resting_orders.sql`,
 `0004_analytics.sql`, `0005_admin.sql` (all 2026-08-30).
 
+**`0008_membership.sql` is written and NOT yet applied.** Unlike 0005 and 0006
+it is not a hard cutover — nothing answers 500 without it, because it adds no
+column and changes no signature. What it changes is that `bootstrap_member()`
+and `create_season()` take the *same* advisory lock, which is what stops a
+signup landing in a season that is being retired underneath it; and it adds
+`ensure_season_portfolios()`, which is the repair for a member already stranded
+there. Until it is pasted in, the race is still open and the console's "fund
+them" control answers 503 naming this file. Verify afterwards that both
+functions' bodies contain `hashtext('club_membership')`, that
+`ensure_season_portfolios` is `prosecdef`, and that EXECUTE on it is false for
+`anon` and `authenticated`.
+
 `0006_derivatives.sql` was applied 2026-09-02 and verified: the three
 `multiplier` columns are present and default to 1, `place_order`, `queue_order`
 and `settle_option_expiry` each resolve with `p_multiplier` and have exactly one
@@ -1153,6 +1165,40 @@ values positions against quotes for the member's own grid, so the detail panel
 reuses that rather than growing a second copy. Their resting orders are not in
 it and must not be.
 
+### A member is on this screen only if they hold a portfolio in the season
+
+`loadClub()` reads `portfolios` filtered by `season_id`, so a member without one
+is not a row that renders badly — they are not a row. Nothing told them, nothing
+told the officers, and nothing in the app could put them back, which is what
+"a user was deleted off the leaderboard for no reason" turned out to be.
+
+Exactly two functions create portfolios — `bootstrap_member()` at signup and
+`create_season()` at rollover — and between them every member should always have
+exactly one. They took *different* advisory locks, so they did not serialise
+against each other: a signup committing while `create_season()` sat between its
+`profiles` read and its commit was funded into the season being retired and left
+out of the backfill into the new one. Both transactions succeed and the member is
+off the board permanently. Migration 0008 puts both on one lock, so whichever
+runs first is seen whole by the other, and `migrations.test.ts` fails the build
+if they drift apart again.
+
+**A gap is now reported, not merely prevented.** The standings read `profiles`
+alongside `portfolios` — one small indexed query per twenty-second memo for the
+whole club — and name anybody on the roster without a row. A screen assembled
+only from what it found cannot tell "the club is one member smaller" from
+"somebody vanished", and the difference is the entire failure. The same applies
+to the 500-portfolio cap: it reports `truncated` rather than quietly ranking
+whichever five hundred came back, and the query is ordered so that which ones
+those are at least stays stable between polls.
+
+**And a gap is repairable.** `ensure_season_portfolios()` is the insert
+`create_season()` already ends with, addressable on its own, behind one
+unarmed button on F6 — unarmed because its `on conflict do nothing` means a
+second press does nothing the first did not, so it can add a missing row and
+never overwrite a balance. It funds at the season's current starting cash and
+stamps it on the portfolio, so a repaired member is measured against their own
+baseline like everyone else.
+
 **Every money line here carries the contract multiplier, including the two that
 are not equity.** `marketValues()` applies it, so `equity`, `longMv`, `shortMv`
 and therefore `gross` are right for free — and that is exactly what makes the
@@ -1203,6 +1249,17 @@ season being replayed. The arithmetic is deliberately duplicated rather than
 shared - the live path must not depend on the correction path - and
 `migrations.test.ts` fails the build if the two disagree about which way a side
 moves cash.
+
+### Funding a member who has none
+
+The roster already printed "No portfolio" in red against a member with none in
+the active season — it was the only place in the app that said so — and there
+was nothing an officer could do about it short of writing SQL. Now that row is
+counted in a strip at the top of the panel with a single button under it, and
+the button is deliberately not armed: `ensure_season_portfolios()` inserts `on
+conflict do nothing`, so pressing it twice does nothing the first press did not.
+Arming a control that cannot do damage is how an officer learns to click through
+the arming on the one that can.
 
 **A replay can be impossible, and then nothing happens.** Voiding the BUY that a
 later SELL sold out of would leave that SELL selling shares nobody owned, so it
@@ -1345,6 +1402,22 @@ genuinely cannot do the desktop way.
 their secondary columns, and the option chain loses a field per side.
 `src/hooks/useMediaQuery.ts` holds that number once, so the CSS breakpoints and
 the JS ones cannot drift into a width that is neither layout.
+
+### The grid owns its row keys
+
+`DataGrid` derives a distinct key per row rather than using what `rowKey`
+returns. React renders only the **last** of two siblings that share a key,
+silently — no error, no gap, one row fewer than the data has — and on F3 that is
+a member deleted for no reason. Eight grids hand in their own `rowKey`, and each
+one is a uniqueness claim made somewhere else: a database constraint, or a symbol
+that happens not to repeat inside one member's book. This is the one place that
+can make the claim true instead of assuming it, and a collision then costs a
+wasted re-render rather than a row.
+
+It is invisible from a test that renders on the server: `renderToStaticMarkup` is
+one pass with no reconciliation, so it draws both rows and reports nothing wrong.
+`scripts/leaderboard-render.test.ts` therefore counts the rows *and* reads the
+component, because only the second half can see the guarantee.
 
 ### A grid drops columns and then scrolls, in that order
 

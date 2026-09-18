@@ -103,6 +103,11 @@ function row(overrides: Record<string, unknown> = {}) {
   };
 }
 
+/** How many member rows the table actually drew. */
+function rowsIn(html: string): number {
+  return (html.match(/<tr class="row/g) ?? []).length;
+}
+
 const complete = {
   // Midday, so the date this prints does not depend on the machine's timezone.
   season: { id: "s1", name: "2026", startsAt: "2026-01-05T12:00:00Z", tradingLocked: false },
@@ -191,4 +196,79 @@ test("a failing screen is caught inside the shell, not around it", () => {
       `${chrome} must sit outside the boundary so it survives a broken screen`,
     );
   }
+});
+
+/**
+ * The failure this screen was actually reported for: a member gone, with no
+ * explanation anywhere.
+ *
+ * A member of the club with no portfolio in the active season produces no row —
+ * `loadClub()` reads portfolios, so they are not a row that renders badly, they
+ * are not a row. A screen assembled only from what it found cannot tell "the
+ * club is one member smaller" from "somebody was deleted", so the payload names
+ * them and the panel says so.
+ */
+test("a member with no portfolio is named on the screen rather than silently absent", () => {
+  const html = renderStandings({
+    ...complete,
+    missing: [{ userId: "u-cal", displayName: "Cal" }],
+  });
+
+  assert.match(html, />Not ranked</);
+  assert.match(html, /Cal has no portfolio in this season/);
+  // And the members who do have one are still drawn.
+  assert.equal(rowsIn(html), complete.rows.length);
+});
+
+test("several missing members are named up to a point and then counted", () => {
+  const missing = ["Cal", "Dee", "Eve", "Fay", "Gil"].map((displayName, i) => ({
+    userId: `u-${i}`,
+    displayName,
+  }));
+
+  const html = renderStandings({ ...complete, missing });
+  assert.match(html, /Cal, Dee, Eve and 2 more have no portfolio/);
+});
+
+test("a payload with nobody missing says nothing at all", () => {
+  for (const standings of [complete, { ...complete, missing: [] }, { ...complete, missing: undefined }]) {
+    assert.doesNotMatch(renderStandings(standings), />Not ranked</);
+  }
+});
+
+test("a truncated club is reported rather than passed off as the whole standings", () => {
+  assert.doesNotMatch(renderStandings(complete), />Partial standings</);
+  assert.match(renderStandings({ ...complete, truncated: true }), />Partial standings</);
+});
+
+/**
+ * Every row reaches the table.
+ *
+ * React renders only the **last** of two siblings sharing a key, silently.
+ * `renderToStaticMarkup` is one pass with no reconciliation, so it cannot
+ * observe that — which is exactly why the guarantee belongs in `DataGrid`
+ * rather than in the eight callers that each hand in their own `rowKey` and
+ * each assume it is unique. The count below catches a grid that drops rows
+ * outright; the source assertion catches the key going back to being taken at
+ * face value.
+ */
+test("the grid draws one row per member, whatever their ids look like", () => {
+  const ids: (string | undefined)[] = ["pf-a", "pf-a", "", undefined, "pf-b"];
+  const rows = ids.map((portfolioId, i) =>
+    row({ rank: i + 1, portfolioId, userId: `u-${i}`, displayName: `M${i}`, top: null }),
+  );
+
+  const html = renderStandings({ ...complete, rows });
+  assert.equal(rowsIn(html), ids.length);
+  for (let i = 0; i < ids.length; i++) assert.match(html, new RegExp(`>M${i}<`));
+});
+
+test("DataGrid derives its own row keys instead of trusting rowKey to be unique", () => {
+  const grid = readFileSync(
+    fileURLToPath(new URL("../src/components/terminal/DataGrid.tsx", import.meta.url)),
+    "utf8",
+  );
+
+  assert.doesNotMatch(grid, /key=\{rowKey\(/, "a raw rowKey can collide and silently drop a row");
+  assert.match(grid, /const seen = new Set<string>\(\)/);
 });

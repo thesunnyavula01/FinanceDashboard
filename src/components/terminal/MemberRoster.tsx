@@ -3,7 +3,7 @@ import { Panel } from "./Panel";
 import { DataGrid, type Column } from "./DataGrid";
 import { Value } from "./Value";
 import { ActionButton, Feedback, type Outcome } from "./AdminControls";
-import { useSetRole } from "@/hooks/useAdmin";
+import { useFundMissingMembers, useSetRole } from "@/hooks/useAdmin";
 import { ApiError, type AdminMember } from "@/lib/api";
 import { money, stampET } from "@/lib/format";
 
@@ -22,15 +22,45 @@ import { money, stampET } from "@/lib/format";
 export function MemberRoster({
   members,
   currentUserId,
+  activeSeasonId,
 }: {
   members: AdminMember[];
   currentUserId: string | undefined;
+  /** The season a repaired member would be funded into. Null with no season. */
+  activeSeasonId?: string | null;
 }) {
   const setRole = useSetRole();
+  const fundMissing = useFundMissingMembers();
   const [outcome, setOutcome] = useState<Outcome | null>(null);
   const [working, setWorking] = useState<string | null>(null);
 
   const officers = members.filter((member) => member.role === "admin").length;
+
+  // A member with no portfolio in the active season is not a row that renders
+  // badly on the leaderboard — they are not a row. This panel was already the
+  // only place in the app that said so; it can now do something about it.
+  const unfunded = members.filter((member) => member.portfolioId === null);
+
+  function fundEveryone() {
+    if (!activeSeasonId) return;
+    setOutcome(null);
+
+    fundMissing.mutate(activeSeasonId, {
+      onSuccess: (result) =>
+        setOutcome({
+          tone: "ok",
+          text:
+            result.created === 0
+              ? "Every member already had a portfolio in this season. Nothing changed."
+              : `${result.created} member${result.created === 1 ? "" : "s"} funded. They are on the leaderboard now.`,
+        }),
+      onError: (err) =>
+        setOutcome({
+          tone: "error",
+          text: err instanceof ApiError ? err.message : "Could not fund the missing members.",
+        }),
+    });
+  }
 
   function changeRole(member: AdminMember) {
     const next = member.role === "admin" ? "member" : "admin";
@@ -165,6 +195,33 @@ export function MemberRoster({
         meta slot is styled as a label and uppercases what it holds, which is
         right for a count and wrong for a sentence.
       */}
+      {/*
+        Named, counted, and repairable in one press. A member without a
+        portfolio is silently absent from F3 — which reads to everyone else as
+        someone being deleted off the leaderboard — so the officer sees the
+        count, the names are already red in the Cash column, and the fix is
+        here rather than in the SQL editor.
+      */}
+      {unfunded.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2 border-b border-accent-dim bg-accent-wash px-2.5 py-1.5">
+          <span className="label shrink-0 text-accent">Not on the leaderboard</span>
+          <span className="text-ink-dim">
+            {unfunded.length === 1
+              ? `${unfunded[0]!.displayName} has no portfolio in this season, so they have no row in the standings.`
+              : `${unfunded.length} members have no portfolio in this season, so they have no row in the standings.`}
+          </span>
+          <ActionButton
+            tone="accent"
+            onClick={fundEveryone}
+            pending={fundMissing.isPending}
+            disabled={!activeSeasonId}
+            title={activeSeasonId ? undefined : "Start a season first."}
+          >
+            Fund {unfunded.length === 1 ? "them" : "them all"}
+          </ActionButton>
+        </div>
+      )}
+
       {outcome && (
         <div className="border-b border-line px-2.5 py-1">
           <Feedback outcome={outcome} />

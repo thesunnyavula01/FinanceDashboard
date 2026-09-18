@@ -464,3 +464,60 @@ test("expiry settles a long position and releases what it was holding", () => {
   // reservation forever.
   assert.match(settle, /update pending_orders[\s\S]*?reserved_cash = 0,\s*reserved_qty = 0/);
 });
+
+/**
+ * The one way a member disappears off the leaderboard.
+ *
+ * A member is in the standings if and only if they hold a portfolio in the
+ * active season — `loadClub()` reads `portfolios` filtered by `season_id`, so
+ * somebody without one is not a row that renders badly, they are not a row.
+ * Exactly two functions create portfolios, and between them every member should
+ * always have exactly one.
+ *
+ * They took different advisory locks, which meant they did not serialise
+ * against each other: a signup committing while `create_season()` ran between
+ * its `profiles` read and its commit was funded into the season being retired
+ * and left out of the backfill into the new one. Both transactions succeeded,
+ * and the member was off the board permanently.
+ */
+test("signup and a season rollover take the same lock, so neither can strand a member", () => {
+  const lockIn = (name: string) => {
+    const match = /pg_advisory_xact_lock\(hashtext\('([^']+)'\)\)/.exec(liveBodyOf(name));
+    assert.ok(match, `${name} must take an advisory lock`);
+    return match![1];
+  };
+
+  const signup = lockIn("bootstrap_member");
+  const rollover = lockIn("create_season");
+  const repair = lockIn("ensure_season_portfolios");
+
+  assert.equal(
+    signup,
+    rollover,
+    "a signup and a rollover must serialise, or a member lands in the dead season",
+  );
+  assert.equal(repair, rollover, "the repair must not run against a season being retired");
+});
+
+test("every function that creates a portfolio funds it from the season it names", () => {
+  // Reading anything but the named season's figure here is how a repaired
+  // member ends up measured against a baseline they were never given. The
+  // insert always carries both cash and the stamped baseline — see 0005.
+  for (const name of ["bootstrap_member", "create_season", "ensure_season_portfolios"]) {
+    assert.match(
+      liveBodyOf(name),
+      /insert into portfolios \(season_id, user_id, cash, starting_cash\)/,
+      `${name} must stamp the baseline it funds with`,
+    );
+  }
+});
+
+test("the repair can only add a missing portfolio, never overwrite a balance", () => {
+  const repair = liveBodyOf("ensure_season_portfolios");
+
+  // This is the whole reason the control on F6 is a single click rather than an
+  // armed one: pressing it twice does nothing the first press did not.
+  assert.match(repair, /on conflict \(season_id, user_id\) do nothing/);
+  assert.doesNotMatch(repair, /update portfolios/);
+  assert.doesNotMatch(repair, /delete from/);
+});

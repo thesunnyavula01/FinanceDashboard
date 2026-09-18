@@ -113,7 +113,11 @@ export function Admin() {
         <LifecyclePanel season={activeSeason} members={overview.members.length} />
       </div>
 
-      <MemberRoster members={overview.members} currentUserId={session?.user.id} />
+      <MemberRoster
+        members={overview.members}
+        currentUserId={session?.user.id}
+        activeSeasonId={activeSeason?.id ?? null}
+      />
 
       <Corrections portfolios={roster} />
     </div>

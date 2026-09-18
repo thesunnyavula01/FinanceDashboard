@@ -38,6 +38,18 @@ export function Leaderboard() {
   const spy = standings?.benchmarks?.spy ?? null;
   const qqq = standings?.benchmarks?.qqq ?? null;
 
+  // Everyone in the club who has no row. Named rather than counted: "one member
+  // is missing" invites a hunt, and the whole failure being fixed here is that
+  // nobody could tell who had gone.
+  const missing = standings?.missing ?? [];
+  const missingNames =
+    missing.length <= 3
+      ? missing.map((member) => member.displayName).join(", ")
+      : `${missing
+          .slice(0, 3)
+          .map((member) => member.displayName)
+          .join(", ")} and ${missing.length - 3} more`;
+
   // "since Jan 5", or nothing at all. The non-null assertion this replaces was
   // the only thing standing between a payload without a season on it and a
   // blank terminal.
@@ -295,6 +307,40 @@ export function Leaderboard() {
     // two scrollbars where one would do.
     <div className="flex min-h-full flex-col md:h-full">
       <StatStrip stats={stats} />
+
+      {/*
+        A member of the club with no portfolio in this season has no row here —
+        `loadClub()` reads portfolios, so they are not a row that renders badly,
+        they are not a row. Left unsaid, that is indistinguishable from someone
+        being deleted off the leaderboard, which is what it was reported as. So
+        it is said, with the names in it, and an officer has a one-press repair
+        on F6.
+      */}
+      {missing.length > 0 && (
+        <div
+          role="status"
+          className="shrink-0 border-b border-accent-dim bg-accent-wash px-3 py-1.5 sm:flex sm:items-baseline sm:gap-2"
+        >
+          <span className="label block shrink-0 text-accent sm:inline">Not ranked</span>
+          <span className="block text-ink-dim">
+            {missingNames} {missing.length === 1 ? "has" : "have"} no portfolio in this season, so
+            there is no row to draw. An officer can fix it from the admin console.
+          </span>
+        </div>
+      )}
+
+      {standings?.truncated && (
+        <div
+          role="status"
+          className="shrink-0 border-b border-loss/40 bg-loss/10 px-3 py-1.5 sm:flex sm:items-baseline sm:gap-2"
+        >
+          <span className="label block shrink-0 text-loss sm:inline">Partial standings</span>
+          <span className="block text-ink-dim">
+            This season holds more portfolios than one request returns, so the table below is not
+            the whole club.
+          </span>
+        </div>
+      )}
 
       {standings?.season?.tradingLocked && (
         <div

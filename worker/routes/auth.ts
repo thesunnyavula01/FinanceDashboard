@@ -151,11 +151,20 @@ me.get("/", requireAuth, async (c) => {
     return c.json({ error: "This account has no profile. Ask a club officer." }, 404);
   }
 
-  const { data: portfolio } = await supabase
+  // A member keeps their portfolios from earlier seasons. Filter the embedded
+  // season as an inner join so those historical rows cannot make maybeSingle()
+  // fail or make an inactive portfolio look like the current account.
+  const { data: portfolio, error: portfolioError } = await supabase
     .from("portfolios")
-    .select("id, cash, season_id, seasons(name, starting_cash, trading_locked, is_active)")
+    .select("id, cash, season_id, seasons!inner(name, starting_cash, trading_locked, is_active)")
     .eq("user_id", user.id)
+    .eq("seasons.is_active", true)
     .maybeSingle();
+
+  if (portfolioError) {
+    console.error("profile portfolio lookup failed:", portfolioError);
+    return c.json({ error: "Could not load your portfolio." }, 500);
+  }
 
   return c.json({
     id: profile.id,

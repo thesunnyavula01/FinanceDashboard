@@ -44,7 +44,7 @@ leaderboard.use("*", requireAuth);
 const RANKING_TTL_MS = 20_000;
 
 /** A club far larger than the 30-100 this is built for. Bounds one bad query. */
-const MAX_PORTFOLIOS = 500;
+const MAX_MEMBERS = 500;
 
 /** Fills shown on a member's detail panel. A season's worth is not the point. */
 const DETAIL_TRADES = 50;
@@ -66,20 +66,14 @@ interface Standings {
   /**
    * Members of the club with no portfolio in this season.
    *
-   * A member is in the standings if and only if they hold a portfolio in the
-   * active season — `loadClub()` reads `portfolios` filtered by `season_id`, so
-   * somebody without one is not a row that renders badly, they are not a row.
-   * Reported rather than left to be noticed, because "a member vanished" and
-   * "the club is one member smaller" look identical on a screen that only ever
-   * shows what it found. An officer repairs it from the console; migration 0008
-   * closes the race that was creating it.
+   * Membership and active-season portfolios come from one database snapshot.
+   * Only a complete read can report a genuine funding gap. A truncated or failed
+   * read fails the refresh instead; it is never evidence to fund a new account.
    */
   missing: UnrankedMember[];
   /**
-   * The season holds more portfolios than one query returns.
-   *
-   * Never true for a club of 30-100, and it says so rather than quietly ranking
-   * whichever five hundred Postgres handed back first.
+   * Kept for older clients. New builds reject incomplete database reads rather
+   * than publishing a partial club; successful responses always carry false.
    */
   truncated: boolean;
   asOf: string;
@@ -87,10 +81,14 @@ interface Standings {
 }
 
 let cached: { seasonId: string; at: number; standings: Standings } | null = null;
+let pending: { seasonId: string; promise: Promise<Standings> } | null = null;
 
 /** Drops the memo. For the admin console, which can change what it ranks. */
 export function forgetStandings(): void {
   cached = null;
+  // Detach an older read too: it must not repopulate the memo after a repair,
+  // reset or season change has invalidated the books it was reading.
+  pending = null;
 }
 
 leaderboard.get("/", async (c) => {
@@ -102,20 +100,32 @@ leaderboard.get("/", async (c) => {
     throw err;
   }
 
-  const season = await activeSeason(supabase);
-  if (!season) {
-    return c.json(emptyStandings("There is no active season yet. Ask a club officer to start one."));
-  }
-
-  if (cached && cached.seasonId === season.id && Date.now() - cached.at < RANKING_TTL_MS) {
-    return c.json(cached.standings);
-  }
-
   try {
-    const standings = await buildStandings(c.env, supabase, season, (p) =>
-      c.executionCtx.waitUntil(p),
-    );
-    cached = { seasonId: season.id, at: Date.now(), standings };
+    const season = await activeSeason(supabase);
+    if (!season) {
+      return c.json(emptyStandings("There is no active season yet. Ask a club officer to start one."));
+    }
+
+    if (cached && cached.seasonId === season.id && Date.now() - cached.at < RANKING_TTL_MS) {
+      return c.json(cached.standings);
+    }
+
+    // Polls arriving while the memo is cold share the database read as well as
+    // the quotes. Otherwise a slow older build can overwrite a newer roster.
+    if (!pending || pending.seasonId !== season.id) {
+      const work = {
+        seasonId: season.id,
+        promise: buildStandings(c.env, supabase, season, (p) => c.executionCtx.waitUntil(p)),
+      };
+      pending = work;
+      work.promise = work.promise.then((standings) => {
+        if (pending === work) cached = { seasonId: season.id, at: Date.now(), standings };
+        return standings;
+      }).finally(() => {
+        if (pending === work) pending = null;
+      });
+    }
+    const standings = await pending.promise;
     return c.json(standings);
   } catch (err) {
     console.error("leaderboard build failed:", err);
@@ -249,51 +259,57 @@ async function buildStandings(
 }
 
 /**
- * Every portfolio in the season, with its owner and its holdings — and every
- * member who has no portfolio in it.
+ * Read membership and books in one database snapshot. Separate roster and
+ * portfolio reads can straddle an atomic signup, falsely reporting its owner
+ * as unfunded. The left embedding retains genuinely unfunded members; the
+ * season filter applies to their books, not to who belongs to the club.
  *
- * One embedded select rather than three round trips. A hundred members holding
- * ten positions each is a thousand small rows, which is one modest response —
- * and it is read once per quote interval for the whole club, not once per
- * member.
- *
- * **The roster is read alongside it, and that second query is the point.** The
- * standings are built from `portfolios`, so a member with no portfolio in this
- * season produces no row — and a screen assembled only from what it found
- * cannot tell "the club is one member smaller" from "a member disappeared". So
- * the club is read from `profiles`, which is the list of who is actually in it,
- * and anybody on that list without a portfolio is reported rather than omitted.
- * It costs one small indexed read per twenty-second memo for the whole club.
- *
- * Ordered by id, so if the cap ever did bite, *which* portfolios came back
- * would at least be stable between polls rather than a member blinking in and
- * out with whatever plan Postgres chose. `truncated` is what says it bit.
+ * Exact counts cover both top-level rows and embedded holdings. PostgREST can
+ * return HTTP 200 with fewer rows than requested when its server-side cap is
+ * lower than our limit. A partial success must fail this refresh, preserving
+ * the browser's last complete standings instead of replacing the club with a
+ * smaller one or claiming that a truncated member needs a new portfolio.
  */
 async function loadClub(
   supabase: SupabaseClient,
   seasonId: string,
 ): Promise<{ portfolios: ClubPortfolio[]; missing: UnrankedMember[]; truncated: boolean }> {
-  const [{ data, error }, { data: roster, error: rosterError }] = await Promise.all([
-    supabase
-      .from("portfolios")
-      .select(
-        "id, user_id, cash, starting_cash, profiles(display_name, role), positions(symbol, qty, avg_cost, multiplier)",
-      )
-      .eq("season_id", seasonId)
-      .order("id")
-      .limit(MAX_PORTFOLIOS),
-    supabase.from("profiles").select("id, display_name").order("created_at"),
-  ]);
+  const { data, error, count } = await supabase
+    .from("profiles")
+    .select(
+      "id, display_name, role, portfolios(id, cash, starting_cash, positions(symbol, qty, avg_cost, multiplier), position_count:positions(count)), portfolio_count:portfolios(count)",
+      { count: "exact" },
+    )
+    .eq("portfolios.season_id", seasonId)
+    .eq("portfolio_count.season_id", seasonId)
+    .order("id")
+    .limit(MAX_MEMBERS);
 
   if (error) throw error;
+  if (!Array.isArray(data) || data.length !== count) {
+    throw new Error(`Standings incomplete: received ${data?.length ?? "no"}/${count} members.`);
+  }
 
-  const portfolios = (data ?? []).map((row) => {
-    const profile = profileOf(row);
-    return {
+  const portfolios: ClubPortfolio[] = [];
+  const missing: UnrankedMember[] = [];
+  for (const profile of data) {
+    const books = profile.portfolios;
+    if (!Array.isArray(books) || books.length !== profile.portfolio_count?.[0]?.count || books.length > 1) {
+      throw new Error(`Standings incomplete: portfolio count mismatch for member ${profile.id}.`);
+    }
+    const row = books[0];
+    if (!row) {
+      missing.push({ userId: profile.id, displayName: profile.display_name ?? "Unknown member" });
+      continue;
+    }
+    if (!Array.isArray(row.positions) || row.positions.length !== row.position_count?.[0]?.count) {
+      throw new Error(`Standings incomplete: holdings truncated for portfolio ${row.id}.`);
+    }
+    portfolios.push({
       portfolioId: row.id as string,
-      userId: row.user_id as string,
-      displayName: profile.display_name,
-      role: profile.role,
+      userId: profile.id as string,
+      displayName: profile.display_name ?? "Unknown member",
+      role: profile.role === "admin" ? "admin" : "member",
       cash: Number(row.cash),
       startingCash: Number(row.starting_cash),
       positions: ((row.positions ?? []) as Record<string, unknown>[]).map((position) => ({
@@ -302,25 +318,10 @@ async function loadClub(
         avgCost: Number(position.avg_cost),
         multiplier: Number(position.multiplier ?? 1),
       })),
-    };
-  });
-
-  // A failed roster read is not a failed leaderboard. It costs the club the
-  // explanation, not the standings, so it is logged and reported as "nobody
-  // missing" — which is what the screen showed before this query existed.
-  if (rosterError) {
-    console.error("Club roster unavailable, so missing members cannot be named:", rosterError);
+    });
   }
 
-  const ranked = new Set(portfolios.map((portfolio) => portfolio.userId));
-  const missing: UnrankedMember[] = (roster ?? [])
-    .filter((profile) => !ranked.has(profile.id as string))
-    .map((profile) => ({
-      userId: profile.id as string,
-      displayName: (profile.display_name as string | null) ?? "Unknown member",
-    }));
-
-  return { portfolios, missing, truncated: portfolios.length >= MAX_PORTFOLIOS };
+  return { portfolios, missing, truncated: false };
 }
 
 /**

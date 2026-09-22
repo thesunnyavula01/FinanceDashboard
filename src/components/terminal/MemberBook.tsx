@@ -26,7 +26,7 @@ export function MemberBook({
   row: StandingsRow;
   onClose: () => void;
 }) {
-  const { rows, totals, trades, isLoading, isError } = useMemberBook(row.portfolioId);
+  const { rows, totals, trades, hasData, isLoading, isError, error, isFetching, refetch } = useMemberBook(row.portfolioId);
 
   // Escape closes, the way it does everywhere else in the terminal.
   useEffect(() => {
@@ -207,15 +207,21 @@ export function MemberBook({
         }
         flush
       >
-        {isError ? (
-          <div className="flex h-24 items-center justify-center text-loss">
-            Could not load this member's positions.
+        {isError && (
+          <div role="status" className="border-b border-line px-3 py-2 text-ink-dim">
+            {hasData
+              ? "Refresh unavailable. Showing the last loaded positions and fills."
+              : error?.message ?? "Could not load this member's positions."}
+            <button type="button" onClick={() => void refetch()} disabled={isFetching} className="keycap ml-2">
+              Retry
+            </button>
           </div>
-        ) : isLoading ? (
+        )}
+        {isLoading ? (
           <div className="flex h-24 items-center justify-center">
             <span className="label pulse-dot">Loading</span>
           </div>
-        ) : (
+        ) : hasData ? (
           <DataGrid
             columns={positionColumns}
             rows={rows}
@@ -223,18 +229,18 @@ export function MemberBook({
             defaultSort="marketValue"
             empty={`${row.displayName} holds nothing right now — it is all cash.`}
           />
-        )}
+        ) : null}
       </Panel>
 
       <Panel
         title="Fills"
-        meta={
+        meta={hasData ? (
           <span className="text-ink-faint">
             {trades.length > 0
               ? `${trades.length} most recent · ${money(totals.cash)} cash`
               : `${money(totals.cash)} cash`}
           </span>
-        }
+        ) : null}
         flush
       >
         <DataGrid
@@ -242,7 +248,7 @@ export function MemberBook({
           rows={trades}
           rowKey={(t) => t.id}
           defaultSort="executedAt"
-          empty={`${row.displayName} has not traded yet.`}
+          empty={hasData ? `${row.displayName} has not traded yet.` : "Fills are unavailable until this member's book loads."}
         />
       </Panel>
     </div>

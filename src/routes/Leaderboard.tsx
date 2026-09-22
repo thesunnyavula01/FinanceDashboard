@@ -24,7 +24,7 @@ import type { StandingsRow } from "@/lib/api";
  */
 export function Leaderboard() {
   const { session } = useAuth();
-  const { standings, mine, note, isLoading, isError } = useStandings(session?.user.id);
+  const { standings, mine, note, isLoading, isError, error, isFetching, refetch } = useStandings(session?.user.id);
   const [openMember, setOpenMember] = useState<StandingsRow | null>(null);
 
   const rows = standings?.rows ?? [];
@@ -392,15 +392,27 @@ export function Leaderboard() {
             }
             flush
           >
-            <DataGrid
-              columns={columns}
-              rows={rows}
-              rowKey={(r) => r.portfolioId}
-              defaultSort="rank"
-              defaultDirection="asc"
-              onRowClick={(r) => setOpenMember(r)}
-              empty="Nobody has joined this season yet."
-            />
+            {isError && (
+              <div role="status" className="border-b border-line px-3 py-2 text-ink-dim">
+                {standings
+                  ? "Refresh unavailable. Showing the last loaded standings."
+                  : error?.message ?? "Could not load the standings."}
+                <button type="button" onClick={() => void refetch()} disabled={isFetching} className="keycap ml-2">
+                  Retry
+                </button>
+              </div>
+            )}
+            {(!isError || standings) && (
+              <DataGrid
+                columns={columns}
+                rows={rows}
+                rowKey={(r) => r.portfolioId}
+                defaultSort="rank"
+                defaultDirection="asc"
+                onRowClick={(r) => setOpenMember(r)}
+                empty="Nobody has joined this season yet."
+              />
+            )}
           </Panel>
         </div>
       )}

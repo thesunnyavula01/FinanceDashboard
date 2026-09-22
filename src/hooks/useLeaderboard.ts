@@ -25,10 +25,13 @@ export interface StandingsState {
   note: string | null;
   isLoading: boolean;
   isError: boolean;
+  error: Error | null;
+  isFetching: boolean;
+  refetch: () => Promise<unknown>;
 }
 
 export function useStandings(userId: string | undefined): StandingsState {
-  const { data, isPending, isError } = useQuery({
+  const { data, isPending, isError, error, isFetching, refetch } = useQuery({
     queryKey: STANDINGS_KEY,
     queryFn: api.standings,
     refetchInterval: STANDINGS_REFRESH_MS,
@@ -55,6 +58,9 @@ export function useStandings(userId: string | undefined): StandingsState {
     note: data?.note ?? null,
     isLoading: isPending,
     isError,
+    error,
+    isFetching,
+    refetch,
   };
 }
 
@@ -67,7 +73,7 @@ export function useStandings(userId: string | undefined): StandingsState {
  * valued on the server and one in the browser, is the failure this avoids.
  */
 export function useMemberBook(portfolioId: string | null) {
-  const { data, isPending, isError } = useQuery({
+  const { data, isPending, isError, error, isFetching, refetch } = useQuery({
     queryKey: ["member-book", portfolioId],
     queryFn: () => api.memberBook(portfolioId!),
     enabled: Boolean(portfolioId),
@@ -99,7 +105,11 @@ export function useMemberBook(portfolioId: string | null) {
     rows,
     totals,
     trades: data?.trades ?? [],
+    hasData: Boolean(data),
     isLoading: isPending && Boolean(portfolioId),
     isError,
+    error,
+    isFetching,
+    refetch,
   };
 }

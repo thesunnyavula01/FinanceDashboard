@@ -17,6 +17,7 @@ import { getSecurities } from "./securities.ts";
 import { classify, normalise, underlyingOf } from "./symbols.ts";
 import { lookupSymbol } from "./universe.ts";
 import type { Env } from "../types.ts";
+import { BoundedCache } from "../lib/cache.ts";
 
 /**
  * One member's research request is one shared round of upstream calls.
@@ -65,7 +66,14 @@ class FragmentFailure extends Error {
   }
 }
 
-const memory = new Map<string, Entry<unknown>>();
+/**
+ * Research keeps whole publisher feeds, including summaries, rather than one
+ * price per symbol. Five fragments per equity make fifty complete views here;
+ * older views remain in the shared edge cache. A TTL alone would retain every
+ * company anyone researched for the lifetime of this shared Worker isolate.
+ */
+export const MAX_RESEARCH_MEMORY_ENTRIES = 250;
+const memory = new BoundedCache<Entry<unknown>>(MAX_RESEARCH_MEMORY_ENTRIES);
 const inFlight = new Map<string, Promise<ResearchResult>>();
 
 function edgeKey(key: string): string {
@@ -76,6 +84,7 @@ async function readEdge<T>(key: string): Promise<Cached<T> | null> {
   const now = Date.now();
   const hot = memory.get(key) as Entry<T> | undefined;
   if (hot && now < hot.expiresAt) return hot.value;
+  if (hot) memory.delete(key);
   if (typeof caches === "undefined") return null;
   try {
     const response = await caches.default.match(edgeKey(key));
@@ -294,4 +303,9 @@ async function buildResearch(env: Env, symbol: string, waitUntil?: (promise: Pro
 export function forgetResearch(): void {
   memory.clear();
   inFlight.clear();
+}
+
+/** Number of retained fragments in this isolate. Tests only. */
+export function researchMemorySize(): number {
+  return memory.size;
 }

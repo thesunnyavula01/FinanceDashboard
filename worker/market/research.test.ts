@@ -6,7 +6,7 @@ import { FinnhubProvider } from "./finnhub.ts";
 import { GdeltProvider } from "./gdelt.ts";
 import { HackerNewsProvider } from "./hackernews.ts";
 import { MarketDataError, type NewsItem } from "./provider.ts";
-import { forgetResearch, loadResearch, mergeHeadlines } from "./research.ts";
+import { forgetResearch, loadResearch, mergeHeadlines, MAX_RESEARCH_MEMORY_ENTRIES, researchMemorySize } from "./research.ts";
 import { forgetSecurities, getSecurities } from "./securities.ts";
 import { forgetShards } from "./universe.ts";
 import type { Env } from "../types.ts";
@@ -285,6 +285,77 @@ test("news expiration leaves web, discussion, earnings and filings on their own 
     assert.equal(calls.get("gdelt")?.length, 2);
     assert.equal(calls.get("earnings")?.length, 1);
     assert.equal(calls.get("filings")?.length, 1);
+  });
+});
+
+test("researching many companies bounds full feeds and restores evicted fragments from the edge", async () => {
+  await fixture(async ({ env, calls }) => {
+    const stored = new Map<string, string>();
+    const edgeReads: string[] = [];
+    Object.defineProperty(globalThis, "caches", { configurable: true, value: { default: {
+      match: async (key: string) => {
+        edgeReads.push(key);
+        return stored.has(key) ? new Response(stored.get(key)) : undefined;
+      },
+      put: async (key: string, response: Response) => { stored.set(key, await response.text()); },
+    } } });
+    // A wire fragment holds both providers' normal forty-story responses,
+    // including the full allowed summaries: these are not tiny quote entries.
+    let wireCalls = 0;
+    const feed = (provider: "alpaca" | "finnhub", symbol: string) => {
+      wireCalls += 1;
+      return Array.from({ length: 40 }, (_, i) => story(provider, {
+        headline: `${symbol} company report ${i}`,
+        summary: "Market research detail. ".repeat(70).slice(0, 1500),
+        url: `https://${provider}.example/${symbol}/${i}`,
+      }));
+    };
+    mock.method(AlpacaProvider.prototype, "news", async (symbols: string[]) => feed("alpaca", symbols[0]!));
+    mock.method(FinnhubProvider.prototype, "news", async (symbol: string) => feed("finnhub", symbol));
+    const count = Math.floor(MAX_RESEARCH_MEMORY_ENTRIES / 5) + 1;
+    const symbols = Array.from({ length: count }, (_, i) =>
+      `Q${String.fromCharCode(65 + Math.floor(i / 26))}${String.fromCharCode(65 + i % 26)}`);
+    for (const symbol of symbols) {
+      const result = await loadResearch(env, symbol);
+      assert.equal(result.headlines.length, 81);
+      assert.ok(researchMemorySize() <= MAX_RESEARCH_MEMORY_ENTRIES);
+    }
+    assert.equal(researchMemorySize(), MAX_RESEARCH_MEMORY_ENTRIES);
+    assert.equal(wireCalls, count * 2);
+
+    edgeReads.length = 0;
+    await loadResearch(env, symbols.at(-1)!);
+    assert.deepEqual(edgeReads, [], "the most recently used company stays in memory");
+    await loadResearch(env, symbols[0]!);
+    assert.equal(edgeReads.length, 5, "the oldest company's five fragments were evicted");
+    assert.equal(wireCalls, count * 2, "eviction reuses the shared cache without another provider call");
+    assert.equal(calls.get("earnings")?.length, count);
+    assert.equal(researchMemorySize(), MAX_RESEARCH_MEMORY_ENTRIES, "edge restores obey the same cap");
+  });
+});
+
+test("expired research feeds release memory before replacement providers answer", async () => {
+  await fixture(async ({ env, advance }) => {
+    await loadResearch(env, "AAPL");
+    assert.equal(researchMemorySize(), 5);
+    advance(12 * 60 * 60_000 + 1);
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => { release = resolve; });
+    const emptyAfterRelease = async () => { await pending; return []; };
+    mock.method(AlpacaProvider.prototype, "news", emptyAfterRelease);
+    mock.method(FinnhubProvider.prototype, "news", emptyAfterRelease);
+    mock.method(FinnhubProvider.prototype, "earnings", emptyAfterRelease);
+    mock.method(GdeltProvider.prototype, "news", emptyAfterRelease);
+    mock.method(HackerNewsProvider.prototype, "discussion", emptyAfterRelease);
+    mock.method(EdgarProvider.prototype, "filings", emptyAfterRelease);
+    const refresh = loadResearch(env, "AAPL");
+    try {
+      assert.equal(researchMemorySize(), 0, "stale feeds must not remain retained during an upstream delay");
+    } finally {
+      release();
+      await refresh;
+    }
+    assert.equal(researchMemorySize(), 5);
   });
 });
 

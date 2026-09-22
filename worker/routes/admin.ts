@@ -146,17 +146,20 @@ admin.get("/", async (c) => {
 async function loadMembers(supabase: SupabaseClient) {
   const season = await activeSeason(supabase);
 
-  const [{ data: profiles, error }, { data: portfolios }] = await Promise.all([
+  const [{ data: profiles, error }, { data: portfolios, error: portfoliosError }] = await Promise.all([
     supabase.from("profiles").select("id, display_name, role, created_at").order("created_at"),
     season
       ? supabase
           .from("portfolios")
           .select("id, user_id, cash, starting_cash")
           .eq("season_id", season.id)
-      : Promise.resolve({ data: [] as Record<string, unknown>[] }),
+      : Promise.resolve({ data: [] as Record<string, unknown>[], error: null }),
   ]);
 
-  if (error) throw error;
+  if (error) throw new Error("Could not load the member roster.", { cause: error });
+  // A failed read is not proof that every member needs funding. Reject the
+  // refresh so the console reports the outage instead of an unfunded roster.
+  if (portfoliosError) throw new Error("Could not load member portfolios.", { cause: portfoliosError });
 
   const byUser = new Map(
     (portfolios ?? []).map((row) => [row.user_id as string, row as Record<string, unknown>]),

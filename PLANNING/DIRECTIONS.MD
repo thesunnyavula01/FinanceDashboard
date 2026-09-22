@@ -334,6 +334,12 @@ untouched by any of this; it has no such limit, which is half of why it is tier
 Both providers live behind the interfaces in `worker/market/provider.ts`
 so switching to a paid feed later is a one-file change.
 
+Research's fragment cache is bounded too: 250 entries (about fifty full equity
+views), with expired fragments removed before refetching. Phase 10 originally
+kept every article feed in a plain Map for the lifetime of the isolate; the
+earlier bar/chain cache fix did not cover it. The shared edge cache still serves
+evicted research without repeating the upstream work.
+
 ---
 
 ## Auth
@@ -1167,10 +1173,28 @@ it and must not be.
 
 ### A member is on this screen only if they hold a portfolio in the season
 
-`loadClub()` reads `portfolios` filtered by `season_id`, so a member without one
-is not a row that renders badly — they are not a row. Nothing told them, nothing
-told the officers, and nothing in the app could put them back, which is what
-"a user was deleted off the leaderboard for no reason" turned out to be.
+`loadClub()` reads profiles with their active-season portfolios and holdings in
+one embedded query. Both books and the embedded portfolio counts are filtered
+by season. A left embedding retains genuinely unfunded members for the missing
+member notice. Separate profile and portfolio reads could straddle a signup
+and falsely report a newly funded member as missing.
+
+Exact top-level and embedded counts are required before publishing standings.
+A truncated HTTP 200 response or a failed roster read fails the refresh; it
+cannot replace a complete club with a smaller one or become evidence to fund
+new accounts. The browser keeps its last complete standings and names the
+refresh error. Initial failures show a retry instead of "Nobody has joined".
+Member books also retain their previously loaded holdings and fills on failure.
+
+Cold concurrent requests share one pending build. `forgetStandings()` detaches
+that build, and only the currently pending build may write the memo. Previously
+an older delayed request could overwrite a newer complete ranking with its
+older roster after invalidation; the route regression reproduces that ordering.
+
+The 2026-09-21 live read found 55 profiles, 55 active-season portfolios and no
+missing memberships. The earlier signup/rollover race below is a real potential
+funding gap, but was not established as the cause of intermittent disappearance.
+See `PLANNING/FUNCTIONAL-AUDIT-2026-09-21.md` for the evidence and limits.
 
 Exactly two functions create portfolios — `bootstrap_member()` at signup and
 `create_season()` at rollover — and between them every member should always have
@@ -1182,14 +1206,11 @@ off the board permanently. Migration 0008 puts both on one lock, so whichever
 runs first is seen whole by the other, and `migrations.test.ts` fails the build
 if they drift apart again.
 
-**A gap is now reported, not merely prevented.** The standings read `profiles`
-alongside `portfolios` — one small indexed query per twenty-second memo for the
-whole club — and name anybody on the roster without a row. A screen assembled
-only from what it found cannot tell "the club is one member smaller" from
-"somebody vanished", and the difference is the entire failure. The same applies
-to the 500-portfolio cap: it reports `truncated` rather than quietly ranking
-whichever five hundred came back, and the query is ordered so that which ones
-those are at least stays stable between polls.
+**A gap is reported only after a complete read.** The standings name anybody
+on the roster with no active-season portfolio in that same snapshot. The
+500-member safety cap fails visibly if reached with more members outstanding;
+it never publishes an arbitrary subset as the club. The legacy `truncated`
+field remains for client compatibility and is false on successful new responses.
 
 **And a gap is repairable.** `ensure_season_portfolios()` is the insert
 `create_season()` already ends with, addressable on its own, behind one

@@ -29,14 +29,47 @@ const compiled = await build({
       import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
       import { MemoryRouter } from 'react-router-dom';
       import { Leaderboard } from './src/routes/Leaderboard';
+      import { MemberBook } from './src/components/terminal/MemberBook';
+
+      function renderScreen(client, screen) {
+        const html = renderToStaticMarkup(React.createElement(QueryClientProvider, { client },
+          React.createElement(MemoryRouter, null, screen)));
+        client.clear();
+        return html;
+      }
 
       export function renderStandings(standings) {
         const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
         client.setQueryData(['standings'], standings);
-        const html = renderToStaticMarkup(React.createElement(QueryClientProvider, { client },
-          React.createElement(MemoryRouter, null, React.createElement(Leaderboard))));
-        client.clear();
-        return html;
+        return renderScreen(client, React.createElement(Leaderboard));
+      }
+
+      async function failedQuery(client, queryKey) {
+        await client.fetchQuery({ queryKey, staleTime: 0, retry: false,
+          queryFn: async () => { throw new Error('Club database unavailable.'); }
+        }).catch(() => {});
+        if (client.getQueryState(queryKey)?.status !== 'error') throw new Error('Fixture did not fail');
+      }
+
+      export async function renderFailedStandings(standings) {
+        // Keep the settled error while mounting the SSR observer: in the app
+        // that observer was already mounted when its poll failed.
+        const client = new QueryClient({ defaultOptions: { queries: { retry: false, retryOnMount: false } } });
+        if (standings) client.setQueryData(['standings'], standings);
+        await failedQuery(client, ['standings']);
+        return renderScreen(client, React.createElement(Leaderboard));
+      }
+
+      export async function renderFailedBook(row, book) {
+        const client = new QueryClient({ defaultOptions: { queries: { retry: false, retryOnMount: false } } });
+        const key = ['member-book', row.portfolioId];
+        if (book) client.setQueryData(key, book);
+        client.setQueryData(['quotes', ['AAPL']], {
+          quotes: { AAPL: { symbol: 'AAPL', price: 150, prevClose: 140 } }, unknown: []
+        });
+        client.setQueryData(['securities', ['AAPL']], { securities: {}, pending: [] });
+        await failedQuery(client, key);
+        return renderScreen(client, React.createElement(MemberBook, { row, onClose() {} }));
       }
     `,
     resolveDir: fileURLToPath(new URL("..", import.meta.url)),
@@ -72,13 +105,17 @@ const compiled = await build({
   tsconfig: fileURLToPath(new URL("../tsconfig.app.json", import.meta.url)),
 });
 
-const module = { exports: {} as { renderStandings: (standings: unknown) => string } };
+const module = { exports: {} as {
+  renderStandings: (standings: unknown) => string;
+  renderFailedStandings: (standings?: unknown) => Promise<string>;
+  renderFailedBook: (row: unknown, book?: unknown) => Promise<string>;
+} };
 new Function("require", "module", "exports", compiled.outputFiles[0]!.text)(
   createRequire(import.meta.url),
   module,
   module.exports,
 );
-const { renderStandings } = module.exports;
+const { renderStandings, renderFailedStandings, renderFailedBook } = module.exports;
 
 function row(overrides: Record<string, unknown> = {}) {
   return {
@@ -133,6 +170,54 @@ test("the standings draw the member, the bar and the benchmark on a complete pay
   assert.match(html, /\+1\.00%/);
   assert.match(html, /2 members/);
   assert.match(html, /since Jan 5/);
+});
+
+test("an initial standings failure reports the error instead of claiming nobody joined", async () => {
+  const html = await renderFailedStandings();
+  assert.match(html, /Club database unavailable\./);
+  assert.match(html, />Retry</);
+  assert.doesNotMatch(html, /Nobody has joined this season yet/);
+});
+
+test("a failed standings refresh keeps every previously loaded member visible", async () => {
+  const html = await renderFailedStandings(complete);
+  assert.equal(rowsIn(html), complete.rows.length);
+  assert.match(html, />Ada</);
+  assert.match(html, />Bea</);
+  assert.match(html, /Showing the last loaded standings/);
+});
+
+test("a failed member-book refresh keeps positions and fills visible", async () => {
+  const html = await renderFailedBook(row(), {
+    member: { portfolioId: "pf-ada", userId: "u-ada", displayName: "Ada", role: "member" },
+    cash: 1000,
+    startingCash: 1200,
+    positions: [{ symbol: "AAPL", qty: 2, avgCost: 100, multiplier: 1 }],
+    trades: [{ id: "trade-1", symbol: "AAPL", side: "BUY", qty: 2, price: 100, realizedPnl: 0,
+      executedAt: "2026-09-17T15:04:05Z" }],
+  });
+  assert.equal(rowsIn(html), 2, "the holding and its fill both survive a refetch error");
+  assert.match(html, /150\.00/);
+  assert.match(html, /Showing the last loaded positions and fills/);
+});
+
+test("an initial member-book failure does not masquerade as an empty account", async () => {
+  const html = await renderFailedBook(row());
+  assert.match(html, /Club database unavailable\./);
+  assert.match(html, />Retry</);
+  assert.doesNotMatch(html, /holds nothing right now|has not traded yet/);
+  assert.doesNotMatch(html, /0\.00 cash/);
+});
+
+test("a successfully loaded all-cash book stays distinguishable from a load failure", async () => {
+  const html = await renderFailedBook(row(), {
+    member: { portfolioId: "pf-ada", userId: "u-ada", displayName: "Ada", role: "member" },
+    cash: 1200, startingCash: 1200, positions: [], trades: [],
+  });
+  assert.match(html, /Showing the last loaded positions and fills/);
+  assert.match(html, /Ada holds nothing right now/);
+  assert.match(html, /Ada has not traded yet/);
+  assert.match(html, /1,200\.00 cash/);
 });
 
 /**

@@ -53,9 +53,15 @@ test("a crypto history outage does not discard the stock benchmarks or cache the
     const intraday = await intradayBars(env, ["SPY", "BTC/USD"], "2026-09-14T00:00:00Z");
     assert.deepEqual([...daily.keys()], ["SPY"]);
     assert.deepEqual([...intraday.keys()], ["SPY"]);
+    assert.deepEqual([...daily.unavailable], ["BTC/USD"], "daily callers must distinguish an outage from a valid empty history");
+    assert.deepEqual([...intraday.unavailable], ["BTC/USD"], "the 1D chart must disclose the failed venue");
     cryptoFailed = false;
-    assert.ok((await dailyBars(env, ["SPY", "BTC/USD"], "2026-09-14", "2026-09-15")).has("BTC/USD"));
-    assert.ok((await intradayBars(env, ["SPY", "BTC/USD"], "2026-09-14T00:00:00Z")).has("BTC/USD"));
+    const dailyRecovered = await dailyBars(env, ["SPY", "BTC/USD"], "2026-09-14", "2026-09-15");
+    const intradayRecovered = await intradayBars(env, ["SPY", "BTC/USD"], "2026-09-14T00:00:00Z");
+    assert.ok(dailyRecovered.has("BTC/USD"));
+    assert.ok(intradayRecovered.has("BTC/USD"));
+    assert.equal(dailyRecovered.unavailable.size, 0);
+    assert.equal(intradayRecovered.unavailable.size, 0);
   } finally { globalThis.fetch = fetch; forgetBars(); forgetIntraday(); }
 });
 

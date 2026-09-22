@@ -295,6 +295,98 @@ test("a failed asset class recovers while genuine missing symbols stay negativel
   assert.deepEqual(next.unknown, ["ZZZZ"]);
 });
 
+for (const size of [83, 300]) {
+  test(`${size} symbols fit the 50-subrequest budget and a cold isolate reuses the whole edge batch`, async () => {
+    const symbols = Array.from({ length: size }, (_, index) => `SYM${index}`);
+    const stored = new Map<string, string>();
+    let calls = { match: 0, put: 0, provider: 0 };
+    const spend = (kind: keyof typeof calls) => {
+      calls[kind] += 1;
+      if (calls.match + calls.put + calls.provider > 50) throw new Error("Too many subrequests");
+    };
+    const edge = {
+      async match(key: unknown) {
+        spend("match");
+        const body = stored.get(String(key));
+        return body === undefined ? undefined : new Response(body);
+      },
+      async put(key: unknown, response: Response) {
+        spend("put");
+        stored.set(String(key), await response.text());
+      },
+    } as unknown as Cache;
+    const { provider } = stubProvider();
+    provider.quotes = async (asked) => {
+      // Alpaca's provider batches at 100 symbols. Its fetches consume the same
+      // request budget as cache.match/put, even if those cache calls miss.
+      for (let offset = 0; offset < asked.length; offset += 100) spend("provider");
+      return new Map(asked.map((symbol) => [symbol, quote(symbol, 100)]));
+    };
+    const clock = fakeClock();
+    const first = await new QuoteCache({ provider, ttlSeconds: 20, cache: edge, now: clock.now }).get(symbols);
+    assert.equal(first.quotes.size, size, "edge probes must leave enough budget to obtain every price");
+    assert.deepEqual(first.unknown, []);
+    assert.deepEqual(calls, { match: 1, put: 1, provider: Math.ceil(size / 100) });
+
+    calls = { match: 0, put: 0, provider: 0 };
+    const cold = await new QuoteCache({ provider, ttlSeconds: 20, cache: edge, now: clock.now }).get([...symbols].reverse());
+    assert.equal(cold.quotes.size, size);
+    assert.deepEqual(calls, { match: 1, put: 0, provider: 0 });
+    assert.deepEqual(cold.stats, { memory: 0, edge: size, fetched: 0 });
+  });
+}
+
+test("rebuilding a mixed warm and missing edge batch does not renew older quote observations", async () => {
+  const clock = fakeClock();
+  const { cache: edge } = stubEdgeCache();
+  const first = stubProvider();
+  const one = new QuoteCache({ provider: first.provider, ttlSeconds: 20, cache: edge, now: clock.now });
+  const original = await one.get(["AAPL"]);
+  const firstAt = clock.now();
+  clock.advance(10_000);
+  const symbols = ["AAPL", "MSFT", "NVDA", "AMZN", "GOOG"];
+  const mixed = await one.get(symbols);
+  assert.equal(mixed.observedAt.get("AAPL"), original.observedAt.get("AAPL"));
+  assert.equal(mixed.observedAt.get("MSFT"), firstAt + 10_000);
+
+  clock.advance(11_000);
+  const second = stubProvider();
+  const cold = await new QuoteCache({ provider: second.provider, ttlSeconds: 20, cache: edge, now: clock.now }).get(symbols);
+  assert.deepEqual(second.batches, [["AAPL"]], "the original mark expires while the later four remain fresh");
+  assert.equal(cold.observedAt.get("AAPL"), firstAt + 21_000);
+  assert.equal(cold.observedAt.get("MSFT"), firstAt + 10_000);
+});
+
+test("batched edge entries retain separate failure and genuine-unknown retry lifetimes", async () => {
+  const { cache: edge } = stubEdgeCache();
+  const clock = fakeClock();
+  const { provider } = stubProvider();
+  const batches: string[][] = [];
+  let failed = true;
+  provider.quotes = async (symbols) => {
+    batches.push(symbols);
+    return fanOut(symbols, {
+      EQUITY: async () => new Map([["AAPL", quote("AAPL", 100)]]),
+      CRYPTO: async (asked) => {
+        if (failed) throw new Error("temporary crypto outage");
+        return new Map(asked.map((symbol) => [symbol, quote(symbol, 100)]));
+      },
+    });
+  };
+  const symbols = ["AAPL", "ZZZZ", "BTC/USD", "ETH/USD", "DOGE/USD"];
+  const initial = await new QuoteCache({ provider, ttlSeconds: 20, cache: edge, now: clock.now }).get(symbols);
+  assert.deepEqual(initial.unknown, ["ZZZZ", "BTC/USD", "ETH/USD", "DOGE/USD"]);
+  failed = false;
+  clock.advance(21_000);
+  const recovered = await new QuoteCache({ provider, ttlSeconds: 20, cache: edge, now: clock.now }).get(symbols);
+  assert.deepEqual(batches[1], ["AAPL", "BTC/USD", "ETH/USD", "DOGE/USD"]);
+  assert.deepEqual(recovered.unknown, ["ZZZZ"]);
+  assert.equal(recovered.quotes.size, 4);
+  clock.advance(280_000);
+  await new QuoteCache({ provider, ttlSeconds: 20, cache: edge, now: clock.now }).get(symbols);
+  assert.ok(batches[2]!.includes("ZZZZ"), "genuine unknowns retry after their own five-minute lifetime");
+});
+
 // ---------------------------------------------------------------------------
 // Input parsing
 // ---------------------------------------------------------------------------

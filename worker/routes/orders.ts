@@ -356,6 +356,18 @@ orders.post("/", async (c) => {
   const marks: Record<string, number> = {};
   for (const [held, heldQuote] of priced.quotes) marks[held] = heldQuote.price;
 
+  if (side === "BUY" || side === "SHORT") {
+    const unpricedShorts = portfolio.positions
+      .filter((position) => position.qty < 0 && !priced.quotes.has(position.symbol))
+      .map((position) => position.symbol);
+    if (unpricedShorts.length > 0) {
+      return c.json({
+        error: `Current prices are unavailable for your short positions (${unpricedShorts.join(", ")}). Try again before adding exposure.`,
+        code: "MARKET_DATA",
+      }, 503);
+    }
+  }
+
   // ---------------------------------------------------------------------------
   // 3. Fill now, or rest?
   //

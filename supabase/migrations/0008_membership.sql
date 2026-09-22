@@ -109,6 +109,11 @@ revoke all on function bootstrap_member(uuid, text) from public, anon, authentic
 --
 -- Unchanged apart from the lock. The backfill is still `on conflict do
 -- nothing`, so it stays safe against a signup that got there first.
+--
+-- `#variable_conflict use_column`: the RETURNS TABLE column `season_id` is
+-- also a PL/pgSQL variable, so `on conflict (season_id, user_id)` would fail
+-- at call time with "column reference season_id is ambiguous". The same
+-- applies to ensure_season_portfolios() below.
 -- =============================================================================
 create or replace function create_season(
   p_name          text,
@@ -124,6 +129,7 @@ language plpgsql
 security definer
 set search_path = public
 as $fn$
+#variable_conflict use_column
 declare
   v_name    text := trim(p_name);
   v_season  seasons%rowtype;
@@ -192,6 +198,7 @@ language plpgsql
 security definer
 set search_path = public
 as $fn$
+#variable_conflict use_column
 declare
   v_season  seasons%rowtype;
   v_created integer;

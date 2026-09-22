@@ -15,7 +15,11 @@ const secret = "order-route-test-secret";
 const symbol = "AAPL300118C00150000";
 let run = 0;
 
-async function fixture(action: (env: Env, rpc: Record<string, unknown>[]) => Promise<void>, multiplier = 1000) {
+async function fixture(
+  action: (env: Env, rpc: Record<string, unknown>[]) => Promise<void>,
+  multiplier = 1000,
+  positions: { symbol: string; qty: number; avg_cost: number; multiplier: number }[] = [],
+) {
   const rpc: Record<string, unknown>[] = [];
   const saved = globalThis.fetch;
   const env = {
@@ -23,7 +27,9 @@ async function fixture(action: (env: Env, rpc: Record<string, unknown>[]) => Pro
     SUPABASE_JWT_SECRET: secret, ALPACA_API_KEY_ID: `test-${++run}`, ALPACA_API_SECRET_KEY: "test-secret",
     QUOTES: { get: async () => null }, ASSETS: { fetch: async () => new Response("SPA") },
   } as unknown as Env;
-  const json = (value: unknown) => new Response(JSON.stringify(value), { headers: { "content-type": "application/json" } });
+  const json = (value: unknown, count?: number) => new Response(JSON.stringify(value), { headers: {
+    "content-type": "application/json", ...(count === undefined ? {} : { "content-range": `*/${count}` }),
+  } });
   forgetSeason(); forgetChains();
   try {
     globalThis.fetch = (async (input, init) => {
@@ -31,11 +37,16 @@ async function fixture(action: (env: Env, rpc: Record<string, unknown>[]) => Pro
       if (url.pathname === "/v2/options/contracts") return json({ option_contracts: [{ symbol, multiplier: String(multiplier), status: "active", tradable: true }] });
       if (url.pathname === "/v1beta1/options/snapshots") return json({ snapshots: { [symbol]: { latestQuote: { bp: 2, ap: 4, t: new Date().toISOString() } } } });
       if (url.pathname === "/v1beta3/crypto/us/snapshots") return json({ snapshots: { "SHIB/USD": { latestTrade: { p: 0.000023, t: new Date().toISOString() } } } });
+      if (url.pathname === "/v2/stocks/snapshots") return json({ AAPL: {
+        latestTrade: { p: 100, t: new Date().toISOString() },
+        dailyBar: { c: 100, t: new Date().toISOString() },
+        prevDailyBar: { c: 100, t: "2026-01-01T21:00:00Z" },
+      } });
       if (url.pathname === "/v2/clock") return json({ is_open: true, next_open: "2030-01-02T14:30:00Z", next_close: "2030-01-02T21:00:00Z" });
       if (url.pathname === "/v2/calendar") return json([]);
       if (url.pathname === "/rest/v1/seasons") return json({ id: "season", name: "Club", starting_cash: 100000, trading_locked: false, starts_at: "2026-01-01" });
       if (url.pathname === "/rest/v1/portfolios") return json({ id: "portfolio", cash: 100000, starting_cash: 100000 });
-      if (url.pathname === "/rest/v1/positions") return json([]);
+      if (url.pathname === "/rest/v1/positions") return json(positions, positions.length);
       if (url.pathname === "/rest/v1/pending_orders") return json([{
         id: "pending", portfolio_id: "portfolio", symbol, side: "BUY", order_type: "LIMIT", limit_price: "4",
         stop_price: null, trail_amount: null, trail_percent: null, trail_anchor: null, triggered_at: null,
@@ -100,6 +111,29 @@ test("a non-object JSON order returns a validation error rather than crashing", 
     for (const body of [null, [], "BUY AAPL"]) assert.equal((await post(env, body)).status, 400);
     assert.equal(rpc.length, 0);
   });
+});
+
+test("opening orders cannot use cost in place of an unavailable existing short quote", async () => {
+  for (const side of ["BUY", "SHORT"]) await fixture(async (env, rpc) => {
+    const response = await post(env, { symbol: "AAPL", side, qty: 1 });
+    assert.equal(response.status, 503);
+    const body = await response.json() as { error: string; code: string };
+    assert.equal(body.code, "MARKET_DATA");
+    assert.match(body.error, /MSFT/);
+    assert.equal(rpc.length, 0, "a missing risk mark must never reach the money-moving RPC");
+  }, 100, [{ symbol: "MSFT", qty: -10, avg_cost: 50, multiplier: 1 }]);
+});
+
+test("closing orders remain available when another short holding cannot be priced", async () => {
+  for (const side of ["SELL", "COVER"]) await fixture(async (env, rpc) => {
+    const response = await post(env, { symbol: "AAPL", side, qty: 1 });
+    assert.equal(response.status, 200, await response.clone().text());
+    assert.equal(rpc.length, 1);
+    assert.equal(rpc[0]?.p_side, side);
+  }, 100, [
+    { symbol: "MSFT", qty: -10, avg_cost: 50, multiplier: 1 },
+    { symbol: "AAPL", qty: side === "SELL" ? 10 : -10, avg_cost: 50, multiplier: 1 },
+  ]);
 });
 
 test("a low-priced crypto asset that fits six-decimal storage can be traded", async () => {

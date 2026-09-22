@@ -7,7 +7,7 @@ import { StatStrip, type Stat } from "@/components/terminal/StatStrip";
 import { Value } from "@/components/terminal/Value";
 import { useStandings } from "@/hooks/useLeaderboard";
 import { useAuth } from "@/lib/auth";
-import { clockET, compact, money, moneySigned, percent, signColor, weight } from "@/lib/format";
+import { clockET, compact, money, moneySigned, percent, signColor, stampET, weight } from "@/lib/format";
 import type { StandingsRow } from "@/lib/api";
 
 /**
@@ -29,6 +29,11 @@ export function Leaderboard() {
 
   const rows = standings?.rows ?? [];
   const summary = standings?.summary;
+  const unpriced = Math.max(standings?.unpriced ?? 0, rows.reduce((sum, row) => sum + (row.unpriced ?? 0), 0));
+  const stale = Math.max(standings?.stale ?? 0, rows.reduce((sum, row) => sum + (row.stale ?? 0), 0));
+  const provisional = stale > 0 || isError;
+  const priceStamp = standings?.pricesAsOf && Number.isFinite(Date.parse(standings.pricesAsOf))
+    ? stampET(standings.pricesAsOf) : null;
   // Every read of the payload below is optional, and that is not defensiveness
   // for its own sake: this is the one response in the app built out of a
   // database read, a batched quote fetch and two bar series, memoised per
@@ -77,7 +82,7 @@ export function Leaderboard() {
       sortValue: (r) => r.rank,
       render: (r) => (
         <span className={`num ${r.userId === session?.user.id ? "text-accent" : "text-ink-dim"}`}>
-          {r.rank}
+          {unpriced > 0 ? "—" : r.rank}
         </span>
       ),
     },
@@ -91,6 +96,11 @@ export function Leaderboard() {
         // the bar out of the panel on the first member called Christopher.
         <span className="flex min-w-0 items-center gap-1.5">
           <span className="truncate text-ink">{r.displayName}</span>
+          {r.unpriced > 0 ? (
+            <span className="label shrink-0 text-accent" title={`${r.unpriced} holding(s) valued at purchase cost`}>Cost</span>
+          ) : (r.stale ?? 0) > 0 ? (
+            <span className="label shrink-0 text-accent" title={`${r.stale} holding(s) use saved market prices`}>Saved</span>
+          ) : null}
           {r.userId === session?.user.id && <span className="keycap shrink-0">YOU</span>}
         </span>
       ),
@@ -212,9 +222,9 @@ export function Leaderboard() {
 
   const stats: Stat[] = [
     {
-      label: "Your rank",
+      label: unpriced > 0 ? "Rank unavailable" : provisional ? "Your rank (provisional)" : "Your rank",
       hero: true,
-      value: mine ? (
+      value: mine && unpriced === 0 ? (
         <span className="num text-ink">
           {mine.rank}
           <span className="text-ink-faint"> / {summary?.members ?? rows.length}</span>
@@ -246,8 +256,9 @@ export function Leaderboard() {
     {
       label: "SPY",
       value: <Benchmark value={spy} />,
-      sub:
-        summary?.beatingBenchmark === null || summary?.beatingBenchmark === undefined ? undefined : (
+      sub: spy === null ? (
+        <span className="label label-ink">Benchmark unavailable</span>
+      ) : summary?.beatingBenchmark === null || summary?.beatingBenchmark === undefined ? undefined : (
           <span className="label label-ink">
             {summary.beatingBenchmark} of {summary.members} ahead
           </span>
@@ -256,6 +267,7 @@ export function Leaderboard() {
     {
       label: "QQQ",
       value: <Benchmark value={qqq} />,
+      sub: qqq === null ? <span className="label label-ink">Benchmark unavailable</span> : undefined,
     },
     {
       // The spread of the club is drawn as a whole axis of bars a screen
@@ -307,6 +319,21 @@ export function Leaderboard() {
     // two scrollbars where one would do.
     <div className="flex min-h-full flex-col md:h-full">
       <StatStrip stats={stats} />
+
+      {unpriced > 0 ? (
+        <div role="status" className="shrink-0 border-b border-loss/40 bg-loss/10 px-3 py-1.5 text-ink-dim">
+          <span className="label mr-2 text-loss">Prices unavailable</span>
+          {unpriced} holding{unpriced === 1 ? " is" : "s are"} valued at purchase cost.
+          {" "}Ranks are unavailable until market prices return.
+        </div>
+      ) : stale > 0 ? (
+        <div role="status" className="shrink-0 border-b border-accent-dim bg-accent-wash px-3 py-1.5 text-ink-dim">
+          <span className="label mr-2 text-accent">Saved prices</span>
+          {stale} holding{stale === 1 ? " uses" : "s use"} saved market prices
+          {priceStamp ? ` from ${priceStamp} ET` : ""}.
+          {" "}Rankings are provisional until current prices return.
+        </div>
+      ) : null}
 
       {/*
         A member of the club with no portfolio in this season has no row here —

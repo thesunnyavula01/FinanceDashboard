@@ -57,6 +57,20 @@ import {
 /** Orders examined per sweep. Far above any plausible club-wide queue. */
 const MAX_ORDERS_PER_SWEEP = 500;
 
+// This Worker runs within the free-plan 50-subrequest ceiling. Reserve setup,
+// auth (for manual sweeps), the quote cache's at-most-eight edge operations and
+// worst-case provider batching before spending the rest on order mutations.
+const SUBREQUEST_LIMIT = 50;
+const SETUP_ALLOWANCE = 12; // includes cold JWKS and permission-read retry headroom
+const QUOTE_CACHE_ALLOWANCE = 8;
+const MAX_CALLS_PER_ORDER = 5; // trail + trigger + universe lookup + fill + reject
+let nextOrderIndex: number | null = null;
+
+/** Reset isolate scheduling state. Tests use this to reproduce cold starts. */
+export function forgetSweepCursor(): void {
+  nextOrderIndex = null;
+}
+
 export interface SweepResult {
   /** False when the market was shut, which is the ordinary weekend case. */
   ran: boolean;
@@ -103,6 +117,7 @@ const SQLSTATE_TO_CODE: Record<string, RejectCode> = {
 export async function sweepRestingOrders(
   env: Env,
   waitUntil?: (promise: Promise<unknown>) => void,
+  at = Date.now(),
 ): Promise<SweepResult> {
   const empty: SweepResult = {
     ran: false,
@@ -127,12 +142,14 @@ export async function sweepRestingOrders(
   // 1. Expiry first, and unconditionally. A DAY order's whole point is that it
   //    dies at the close, which is a moment when the market is not open.
   const { data: expired, error: expiryError } = await supabase.rpc("expire_pending_orders");
-  if (expiryError) console.error("expire_pending_orders failed:", expiryError);
+  // place_order() checks pending status, not the DAY expiration timestamp.
+  // Continuing after a failed expiry pass could fill an already expired order.
+  if (expiryError) throw new Error("Could not expire working orders; the sweep will retry.", { cause: expiryError });
   empty.expired = typeof expired === "number" ? expired : 0;
 
-  // 2. Everything still resting, oldest first. First come, first served is the
-  //    only ordering a member can predict, and it matters: two orders can be
-  //    competing for the same buying power.
+  // 2. Everything still resting, in a stable oldest-first order. The bounded
+  //    execution pass rotates through this order between sweeps so repeatedly
+  //    ratcheting stops cannot consume every invocation's budget forever.
   //
   //    This runs BEFORE the clock is fetched, which is the reverse of the old
   //    order and deliberate. The sweep now fires every minute of every day so
@@ -146,11 +163,12 @@ export async function sweepRestingOrders(
     )
     .eq("status", "PENDING")
     .order("placed_at", { ascending: true })
-    .limit(MAX_ORDERS_PER_SWEEP);
+    .order("id")
+    .limit(MAX_ORDERS_PER_SWEEP)
+    .retry(false);
 
   if (error) {
-    console.error("pending order query failed:", error);
-    return { ...empty, ran: true, reason: "Could not read working orders." };
+    throw new Error("Could not read working orders; the sweep will retry.", { cause: error });
   }
 
   const orders = (data ?? []) as unknown as PendingRow[];
@@ -172,18 +190,19 @@ export async function sweepRestingOrders(
   // Positions of every affected portfolio, so place_order() can be handed marks
   // for the Reg T check rather than falling back to average cost.
   const portfolioIds = [...new Set(tradable.map((o) => o.portfolio_id))];
-  const { data: positionRows, error: positionsError } = await supabase
+  const { data: positionRows, error: positionsError, count: positionCount } = await supabase
     .from("positions")
-    .select("portfolio_id, symbol, qty")
-    .in("portfolio_id", portfolioIds);
+    .select("portfolio_id, symbol, qty", { count: "exact" })
+    .in("portfolio_id", portfolioIds)
+    .retry(false);
 
-  // Not fatal, and deliberately not silent. Without these rows `p_marks` carries
-  // only the symbol being filled, so place_order() margins every other short at
-  // what it was sold for — understating the requirement on exactly the position
-  // that has moved against the member. The sweep still runs; the log line is
-  // what makes an odd fill explainable afterwards.
-  if (positionsError) {
-    console.error("Sweep could not read positions for marks:", positionsError);
+  // An unavailable or capped read is not an empty book. Filling without these
+  // symbols makes SQL value existing shorts at cost and can admit an order the
+  // member cannot afford. Leave the queue intact until a complete read succeeds.
+  if (positionsError || !Array.isArray(positionRows) || positionRows.length !== positionCount) {
+    throw new Error("Could not read complete positions for order risk checks; the sweep will retry.", {
+      cause: positionsError ?? { received: positionRows?.length, expected: positionCount },
+    });
   }
 
   const positionsByPortfolio = new Map<string, string[]>();
@@ -197,14 +216,39 @@ export async function sweepRestingOrders(
   const symbols = [
     ...new Set([...tradable.map((o) => o.symbol), ...(positionRows ?? []).map((r) => r.symbol as string)]),
   ];
+  // Crypto uses the smallest upstream batch (50); partition rounding adds at
+  // most two requests across the three asset classes. No adapter retries.
+  const providerAllowance = Math.ceil(symbols.length / 50) + 2;
+  let remainingCalls = SUBREQUEST_LIMIT - SETUP_ALLOWANCE - QUOTE_CACHE_ALLOWANCE - providerAllowance;
+  if (remainingCalls < MAX_CALLS_PER_ORDER) {
+    throw new Error("The working-order book is too large to price safely in one sweep.");
+  }
   const priced = await quoteCache(env).get(symbols, waitUntil);
+  const unpricedShortOwners = new Set(positionRows
+    .filter((row) => Number(row.qty) < 0 && !priced.quotes.has(row.symbol as string))
+    .map((row) => row.portfolio_id as string));
 
   const result: SweepResult = { ...empty, ran: true };
   // Orders whose own market is shut are still resting, not overlooked.
   result.resting += orders.length - tradable.length;
 
-  for (const order of tradable) {
+  // Ratcheting a long-lived trailing stop spends calls without removing its
+  // row. Rotate the start across sweeps so those orders cannot starve later
+  // instructions while the per-invocation budget is full. A cold isolate seeds
+  // its cursor from the invocation minute and a conservative batch size. Each
+  // fully priced pass can process at least that many orders, so adjacent cold
+  // sweeps advance a whole batch rather than overlapping all but one old row.
+  const coldStride = Math.max(1, Math.floor(remainingCalls / MAX_CALLS_PER_ORDER));
+  const start = (nextOrderIndex ?? Math.floor(at / 60_000) * coldStride) % tradable.length;
+  const rotated = [...tradable.slice(start), ...tradable.slice(0, start)];
+  const reject = async (id: string, reason: string) => {
+    remainingCalls -= 1;
+    return rejectOrder(supabase, id, reason);
+  };
+
+  for (const [index, order] of rotated.entries()) {
     result.considered += 1;
+    nextOrderIndex = (start + index + 1) % tradable.length;
 
     const quote = priced.quotes.get(order.symbol);
     if (!quote) {
@@ -217,6 +261,19 @@ export async function sweepRestingOrders(
     const limitPrice = order.limit_price === null ? null : Number(order.limit_price);
     let stopPrice = order.stop_price === null ? null : Number(order.stop_price);
     let triggeredAt = order.triggered_at;
+    const initialSpec = { side: order.side, orderType: order.order_type, limitPrice, stopPrice, triggeredAt };
+    const needsAction = (order.order_type === "TRAILING_STOP" && triggeredAt === null) ||
+      stopTriggered(initialSpec, quote.price) || isMarketable(initialSpec, quote.price);
+    if (!needsAction) {
+      result.resting += 1;
+      continue;
+    }
+    if (remainingCalls < MAX_CALLS_PER_ORDER) {
+      nextOrderIndex = (start + index) % tradable.length;
+      result.resting += rotated.length - index;
+      result.reason = "Remaining working orders will be checked on the next sweep.";
+      break;
+    }
 
     // ---------------------------------------------------------------------
     // The ratchet, before anything is decided.
@@ -234,6 +291,7 @@ export async function sweepRestingOrders(
     // walking it backwards.
     // ---------------------------------------------------------------------
     if (order.order_type === "TRAILING_STOP" && triggeredAt === null) {
+      remainingCalls -= 1;
       const { data: trailed, error: trailError } = await supabase.rpc("trail_pending_order", {
         p_order_id: order.id,
         p_price: quote.price,
@@ -270,6 +328,7 @@ export async function sweepRestingOrders(
     // one-way event into something that flickers.
     // ---------------------------------------------------------------------
     if (triggeredAt === null && stopTriggered(spec, quote.price)) {
+      remainingCalls -= 1;
       const { error: triggerError } = await supabase.rpc("trigger_pending_order", {
         p_order_id: order.id,
       });
@@ -290,7 +349,17 @@ export async function sweepRestingOrders(
       continue;
     }
 
+    // Opening exposure needs current short marks for Reg T. Closing SELL/COVER
+    // orders stay available because they reduce risk even during a venue outage.
+    if ((order.side === "BUY" || order.side === "SHORT") && unpricedShortOwners.has(order.portfolio_id)) {
+      result.resting += 1;
+      continue;
+    }
+
     const price = fillPriceFor(spec, quote.price);
+    // lookupSymbol only reads one KV shard when cold. It does not invoke the
+    // separate two-provider syncUniverse() job when that shard is missing.
+    remainingCalls -= 1;
     const asset = await lookupSymbol(env, order.symbol).catch(() => undefined);
 
     const resolved = resolveQuantity({
@@ -304,15 +373,15 @@ export async function sweepRestingOrders(
     });
 
     if ("ok" in resolved) {
-      await rejectOrder(supabase, order.id, resolved.message);
-      result.rejected += 1;
+      if (await reject(order.id, resolved.message)) result.rejected += 1;
+      else result.resting += 1;
       continue;
     }
 
     const owner = Array.isArray(order.portfolios) ? order.portfolios[0] : order.portfolios;
     if (!owner?.user_id) {
-      await rejectOrder(supabase, order.id, "This order has no owner.");
-      result.rejected += 1;
+      if (await reject(order.id, "This order has no owner.")) result.rejected += 1;
+      else result.resting += 1;
       continue;
     }
 
@@ -322,6 +391,7 @@ export async function sweepRestingOrders(
       if (mark) marks[symbol] = mark.price;
     }
 
+    remainingCalls -= 1;
     const { error: fillError } = await supabase.rpc("place_order", {
       p_user_id: owner.user_id,
       p_symbol: order.symbol,
@@ -344,8 +414,8 @@ export async function sweepRestingOrders(
       continue;
     }
 
-    await rejectOrder(supabase, order.id, outcome.message);
-    result.rejected += 1;
+    if (await reject(order.id, outcome.message)) result.rejected += 1;
+    else result.resting += 1;
   }
 
   return result;
@@ -371,7 +441,7 @@ function classify(error: PostgrestError): { retry: boolean; message: string } {
   return { retry: isRetryable(code), message: error.message };
 }
 
-async function rejectOrder(supabase: SupabaseClient, id: string, reason: string): Promise<void> {
+async function rejectOrder(supabase: SupabaseClient, id: string, reason: string): Promise<boolean> {
   const { error } = await supabase.rpc("reject_pending_order", {
     p_order_id: id,
     p_reason: reason,
@@ -379,4 +449,5 @@ async function rejectOrder(supabase: SupabaseClient, id: string, reason: string)
   // A failed rejection leaves the order resting with its reservation intact,
   // which is the safe direction: the next sweep tries again.
   if (error) console.error(`Could not reject order ${id}:`, error);
+  return !error;
 }

@@ -6,6 +6,9 @@ import type { Quote } from "../market/provider.ts";
 export const BACKUP_PREFIX = "portfolio-backup:v1:";
 export const SAVED_PRICES_KEY = "portfolio-prices:v1";
 export const BACKUP_RETENTION_SECONDS = 24 * 60 * 60;
+// Price-only display recovery must bridge weekends and holiday outages. This
+// does not extend retention of the private portfolio/trade checkpoints.
+export const SAVED_PRICE_RETENTION_SECONDS = 7 * 24 * 60 * 60;
 // 288 checkpoints/day fit below the KV free storage allowance at this ceiling.
 export const MAX_BACKUP_BYTES = 2 * 1024 * 1024;
 
@@ -54,7 +57,7 @@ export function assertCompleteSeason(season: BackupSeason): void {
 
 export function usableSavedPrice(saved: SavedPrice | undefined, now = Date.now()): boolean {
   const age = now - Date.parse(saved?.savedAt ?? "");
-  return age >= 0 && age <= BACKUP_RETENTION_SECONDS * 1000 &&
+  return age >= 0 && age <= SAVED_PRICE_RETENTION_SECONDS * 1000 &&
     Number.isFinite(saved?.quote?.price) && (saved?.quote?.price ?? 0) > 0;
 }
 
@@ -70,14 +73,15 @@ export async function readSavedPrices(kv: KVNamespace): Promise<SavedPrices> {
 export async function writeBackup(
   kv: KVNamespace, season: BackupSeason, quotes: Map<string, Quote>,
   now = new Date(), previous: SavedPrices = {},
+  observedAt?: Map<string, number>,
 ) {
   assertCompleteSeason(season);
   const capturedAt = now.toISOString();
-  const symbols = [...new Set(season.portfolios.flatMap((p) => p.positions.map((p) => p.symbol)))];
+  const symbols = [...new Set([...season.portfolios.flatMap((p) => p.positions.map((p) => p.symbol)), "SPY", "QQQ"])];
   const prices: SavedPrices = {};
   for (const symbol of symbols) {
     const quote = quotes.get(symbol);
-    if (quote) prices[symbol] = { quote, savedAt: capturedAt };
+    if (quote) prices[symbol] = { quote, savedAt: new Date(observedAt?.get(symbol) ?? now.getTime()).toISOString() };
     else if (usableSavedPrice(previous[symbol], now.getTime())) prices[symbol] = previous[symbol]!;
   }
   const body = JSON.stringify({ version: 1, capturedAt, season, prices });
@@ -91,7 +95,7 @@ export async function writeBackup(
   });
   // A separate public-price-only copy: a quote request never loads private books.
   // Failure here cannot erase the immutable checkpoint written above.
-  await kv.put(SAVED_PRICES_KEY, JSON.stringify(prices), { expirationTtl: BACKUP_RETENTION_SECONDS });
+  await kv.put(SAVED_PRICES_KEY, JSON.stringify(prices), { expirationTtl: SAVED_PRICE_RETENTION_SECONDS });
   return { key, capturedAt, portfolios: season.portfolios.length, prices: Object.keys(prices).length };
 }
 
@@ -103,9 +107,9 @@ export async function backupSeason(env: Env, waitUntil?: (promise: Promise<unkno
   const capturedAt = new Date();
   const season = data as unknown as BackupSeason;
   assertCompleteSeason(season);
-  const symbols = [...new Set(season.portfolios.flatMap((p) => p.positions.map((p) => p.symbol)))];
+  const symbols = [...new Set([...season.portfolios.flatMap((p) => p.positions.map((p) => p.symbol)), "SPY", "QQQ"])];
   const [result, previous] = await Promise.all([
     quoteCache(env).get(symbols, waitUntil), readSavedPrices(env.QUOTES),
   ]);
-  return writeBackup(env.QUOTES, season, result.quotes, capturedAt, previous);
+  return writeBackup(env.QUOTES, season, result.quotes, capturedAt, previous, result.observedAt);
 }

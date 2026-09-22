@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, type Quote, type Security } from "@/lib/api";
-import { LAST_GOOD_QUOTES_KEY, rememberQuotes, retainQuotes } from "../lib/quote-continuity";
+import { LAST_GOOD_QUOTES_KEY, displayedQuotes, rememberQuotes, retainQuotes } from "../lib/quote-continuity";
 
 /**
  * Live prices.
@@ -58,14 +58,16 @@ export function useQuotes(symbols: string[], enabled = true): QuotesState {
     retry: 1,
   });
 
-  const saved = client.getQueryData<Record<string, Quote>>(LAST_GOOD_QUOTES_KEY) ?? {};
-  const displayed: Record<string, Quote> = {};
-  for (const symbol of key) {
-    const quote = data?.quotes[symbol] ?? saved[symbol];
-    if (quote) displayed[symbol] = isError || !data?.quotes[symbol] ? { ...quote, stale: true } : quote;
-  }
+  // Observe this cache too: another screen query can refresh a shared symbol
+  // while this query is failing or waiting for its next scheduled poll.
+  const { data: saved = {} } = useQuery<Record<string, Quote>>({
+    queryKey: LAST_GOOD_QUOTES_KEY,
+    queryFn: () => client.getQueryData<Record<string, Quote>>(LAST_GOOD_QUOTES_KEY) ?? {},
+    enabled: false,
+    gcTime: Infinity,
+  });
   return {
-    quotes: displayed,
+    quotes: displayedQuotes(key, data?.quotes, saved, isError),
     unknown: data?.unknown ?? [],
     asOf: data?.asOf ?? null,
     isLoading: isPending && key.length > 0,

@@ -19,6 +19,8 @@ interface FixtureOptions {
   portfolioReadFails?: boolean;
   noActivePortfolio?: boolean;
   noActiveSeason?: boolean;
+  rosterCount?: number | null;
+  portfolioCount?: number | null;
 }
 
 /** Exercise the real routes and Supabase response handling, including the
@@ -35,8 +37,9 @@ async function fixture(
     SUPABASE_JWT_SECRET: secret, QUOTES: { get: async () => null },
     ASSETS: { fetch: async () => new Response("SPA") },
   } as unknown as Env;
-  const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), {
-    status, headers: { "content-type": "application/json" },
+  const json = (value: unknown, status = 200, count?: number | null) => new Response(JSON.stringify(value), {
+    status, headers: { "content-type": "application/json",
+      ...(count === undefined || count === null ? {} : { "content-range": `*/${count}` }) },
   });
   const portfolios = [
     { id: "old-book", user_id: "member", season_id: "previous", cash: "125000", starting_cash: "100000",
@@ -54,6 +57,17 @@ async function fixture(
       assert.equal(init?.method ?? "GET", "GET", "membership reads must never mutate accounts");
       if (url.pathname === "/rest/v1/profiles") {
         const id = url.searchParams.get("id")?.slice(3);
+        if (url.searchParams.get("select")?.includes("portfolio_count")) {
+          if (options.portfolioReadFails) return json({ code: "TEST_DB_ERROR", message: "Portfolio read failed" }, 400);
+          assert.equal(url.searchParams.get("portfolios.season_id"), options.noActiveSeason ? "is.null" : "eq.current");
+          assert.equal(url.searchParams.get("portfolio_count.season_id"), options.noActiveSeason ? "is.null" : "eq.current");
+          const rows = profiles.map((profile) => {
+            const books = portfolios.filter((book) => book.user_id === profile.id && book.season_id === "current");
+            const count = options.portfolioCount === undefined ? books.length : options.portfolioCount;
+            return { ...profile, portfolios: books, ...(count === null ? {} : { portfolio_count: [{ count }] }) };
+          });
+          return json(rows, 200, options.rosterCount === undefined ? rows.length : options.rosterCount);
+        }
         return json(profiles.filter((profile) => !id || profile.id === id));
       }
       if (url.pathname === "/rest/v1/seasons") return json(options.noActiveSeason ? [] : [currentSeason]);
@@ -118,14 +132,25 @@ test("a failed profile portfolio read reports an error instead of claiming the a
 });
 
 test("the officer roster distinguishes an existing active portfolio from a genuinely unfunded member", async () => {
-  await fixture({}, async (request) => {
+  await fixture({}, async (request, queries) => {
     const response = await request("admin");
     assert.equal(response.status, 200);
     const body = await response.json() as { members: { userId: string; portfolioId: string | null }[] };
     assert.deepEqual(body.members.map((member) => [member.userId, member.portfolioId]), [
       ["member", "current-book"], ["new-member", null],
     ]);
+    assert.ok(queries.every((query) => query.pathname !== "/rest/v1/portfolios"), "membership and funding share one database snapshot");
   });
+});
+
+test("an incomplete officer roster cannot identify members as needing funding", async () => {
+  for (const options of [{ rosterCount: 3 }, { rosterCount: null }, { portfolioCount: 2 }, { portfolioCount: null }]) {
+    await fixture(options, async (request) => {
+      const response = await request("admin");
+      assert.equal(response.status, 500);
+      assert.equal("members" in (await response.json() as object), false);
+    });
+  }
 });
 
 test("a failed roster portfolio read cannot report every member as unfunded", async () => {

@@ -2,6 +2,7 @@ import { providerFromEnv } from "./router.ts";
 import { isTradableSymbol, normalise } from "./symbols.ts";
 import type { PriceProvider, Quote } from "./provider.ts";
 import { MarketDataMap } from "./provider.ts";
+import { BoundedCache } from "../lib/cache.ts";
 
 /**
  * The shared quote cache.
@@ -10,10 +11,11 @@ import { MarketDataMap } from "./provider.ts";
  * refreshing every 20 seconds must not become a hundred requests to Alpaca. It
  * gets there in three tiers, cheapest first.
  *
- *   1. Isolate memory — a plain Map. Free, instant, and it absorbs every
+ *   1. Isolate memory — a bounded LRU. Free, instant, and it absorbs every
  *      simultaneous member served by the same Worker instance.
  *   2. The Cache API — colo-local, shared by every isolate in that data
- *      centre, and free of both operation limits and per-write billing.
+ *      centre, without per-write billing. Every read/write still consumes a
+ *      Worker subrequest, so large symbol sets share one cache envelope.
  *   3. Alpaca, batched 100 symbols to a request.
  *
  * NOT KV, despite the KV binding this project already carries. A 20-second
@@ -38,6 +40,9 @@ export const MAX_SYMBOLS_PER_REQUEST = 300;
  * this, one typo in a portfolio would poll upstream every 20 seconds forever.
  */
 const NEGATIVE_TTL_SECONDS = 300;
+// Cache API calls count as Worker subrequests too. Reserve room for auth,
+// database reads, provider requests and chart history on the free 50-call tier.
+const MAX_INDIVIDUAL_EDGE_SYMBOLS = 4;
 
 /**
  * What shapes this cache will accept.
@@ -58,6 +63,8 @@ interface CacheEntry {
 
 export interface QuoteResult {
   quotes: Map<string, Quote>;
+  /** Original successful cache observation, not the time of the current poll. */
+  observedAt: Map<string, number>;
   /** Requested symbols that no provider could price. */
   unknown: string[];
   /** Where the answer came from. Surfaced in the API response for debugging. */
@@ -110,7 +117,7 @@ export class QuoteCache {
   #cache: Cache | null;
   #namespace: string;
   #now: () => number;
-  #memory = new Map<string, CacheEntry>();
+  #memory = new BoundedCache<CacheEntry>(2000);
   /** Symbol -> the in-progress upstream batch that will resolve it. */
   #inflight = new Map<string, Promise<Map<string, Quote>>>();
 
@@ -142,11 +149,15 @@ export class QuoteCache {
     waitUntil?: (promise: Promise<unknown>) => void,
   ): Promise<QuoteResult> {
     const quotes = new Map<string, Quote>();
+    const observedAt = new Map<string, number>();
     const unknown: string[] = [];
     const stats = { memory: 0, edge: 0, fetched: 0 };
 
     const record = (symbol: string, entry: CacheEntry) => {
-      if (entry.quote) quotes.set(symbol, entry.quote);
+      if (entry.quote) {
+        quotes.set(symbol, entry.quote);
+        observedAt.set(symbol, entry.cachedAt);
+      }
       else unknown.push(symbol);
     };
 
@@ -164,8 +175,16 @@ export class QuoteCache {
 
     // Tier 2 — the colo cache.
     const stillMissing: string[] = [];
+    // Large club reads use ONE edge entry for the sorted symbol set. The club's
+    // set repeats across readers; small personal books retain per-symbol reuse.
+    // A per-symbol probe for 83 holdings already exceeds 50 before Alpaca runs.
+    const batchKey = symbols.length > MAX_INDIVIDUAL_EDGE_SYMBOLS
+      ? this.#edgeKey(`batch/${[...new Set(symbols)].sort().join(",")}`) : null;
     if (this.#cache && missing.length > 0) {
-      const found = await Promise.all(missing.map((s) => this.#readEdge(s)));
+      const batch = batchKey ? await this.#readBatch(batchKey) : null;
+      const found = batchKey
+        ? missing.map((symbol) => batch?.[symbol] ?? null)
+        : await Promise.all(missing.map((s) => this.#readEdge(s)));
       for (let i = 0; i < missing.length; i++) {
         const symbol = missing[i]!;
         const entry = found[i];
@@ -181,7 +200,7 @@ export class QuoteCache {
       stillMissing.push(...missing);
     }
 
-    if (stillMissing.length === 0) return { quotes, unknown, stats };
+    if (stillMissing.length === 0) return { quotes, observedAt, unknown, stats };
 
     // Tier 3 — upstream.
     const fetched = await this.#fetch(stillMissing);
@@ -200,16 +219,39 @@ export class QuoteCache {
     }
 
     if (this.#cache) {
-      const write = Promise.all(
-        stillMissing.map((symbol, i) => this.#writeEdge(symbol, writes[i]!)),
-      );
+      const write = batchKey
+        ? this.#writeBatch(batchKey, symbols)
+        : Promise.all(stillMissing.map((symbol, i) => this.#writeEdge(symbol, writes[i]!)));
       // The response does not need to wait on a cache write, but the isolate
       // must not be torn down mid-write either.
       if (waitUntil) waitUntil(write);
       else await write;
     }
 
-    return { quotes, unknown, stats };
+    return { quotes, observedAt, unknown, stats };
+  }
+
+  async #readBatch(key: string): Promise<Record<string, CacheEntry> | null> {
+    try {
+      const hit = await this.#cache!.match(key);
+      return hit ? await hit.json() as Record<string, CacheEntry> : null;
+    } catch { return null; }
+  }
+
+  async #writeBatch(key: string, symbols: string[]): Promise<void> {
+    const entries: Record<string, CacheEntry> = {};
+    let ttl = 0;
+    for (const symbol of symbols) {
+      const entry = this.#memory.get(symbol);
+      if (!entry || !this.#isFresh(entry)) continue;
+      entries[symbol] = entry;
+      ttl = Math.max(ttl, this.#ttlFor(entry) - (this.#now() - entry.cachedAt));
+    }
+    try {
+      await this.#cache!.put(key, new Response(JSON.stringify(entries), {
+        headers: { "content-type": "application/json", "cache-control": `max-age=${Math.max(1, Math.ceil(ttl / 1000))}` },
+      }));
+    } catch { /* Losing a cache write costs a fetch, never a price. */ }
   }
 
   /**

@@ -146,27 +146,28 @@ admin.get("/", async (c) => {
 async function loadMembers(supabase: SupabaseClient) {
   const season = await activeSeason(supabase);
 
-  const [{ data: profiles, error }, { data: portfolios, error: portfoliosError }] = await Promise.all([
-    supabase.from("profiles").select("id, display_name, role, created_at").order("created_at"),
-    season
-      ? supabase
-          .from("portfolios")
-          .select("id, user_id, cash, starting_cash")
-          .eq("season_id", season.id)
-      : Promise.resolve({ data: [] as Record<string, unknown>[], error: null }),
-  ]);
+  // Read membership and funding together. Two successful reads can straddle a
+  // signup and falsely label its already-funded owner as needing repair.
+  const query = supabase.from("profiles")
+    .select("id, display_name, role, created_at, portfolios(id, cash, starting_cash), portfolio_count:portfolios(count)", { count: "exact" })
+    .order("created_at")
+    .order("id");
+  const filtered = season
+    ? query.eq("portfolios.season_id", season.id).eq("portfolio_count.season_id", season.id)
+    : query.is("portfolios.season_id", null).is("portfolio_count.season_id", null);
+  const { data: profiles, error, count } = await filtered;
 
   if (error) throw new Error("Could not load the member roster.", { cause: error });
-  // A failed read is not proof that every member needs funding. Reject the
-  // refresh so the console reports the outage instead of an unfunded roster.
-  if (portfoliosError) throw new Error("Could not load member portfolios.", { cause: portfoliosError });
+  if (!Array.isArray(profiles) || profiles.length !== count) {
+    throw new Error("Could not read the complete member roster.");
+  }
 
-  const byUser = new Map(
-    (portfolios ?? []).map((row) => [row.user_id as string, row as Record<string, unknown>]),
-  );
-
-  return (profiles ?? []).map((profile) => {
-    const portfolio = byUser.get(profile.id as string);
+  return profiles.map((profile) => {
+    const books = profile.portfolios;
+    if (!Array.isArray(books) || books.length !== profile.portfolio_count?.[0]?.count || books.length > 1) {
+      throw new Error("Could not read complete member portfolios.");
+    }
+    const portfolio = season ? books[0] : undefined;
     return {
       userId: profile.id,
       displayName: profile.display_name,

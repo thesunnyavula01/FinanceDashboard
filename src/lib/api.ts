@@ -622,6 +622,8 @@ export interface StandingsRow {
   top: TopHolding | null;
   /** Positions carried at cost because nothing could price them. */
   unpriced: number;
+  /** Positions valued with saved market prices while current prices are unavailable. */
+  stale?: number;
 }
 
 export interface ClubSummary {
@@ -648,6 +650,10 @@ export interface StandingsResponse {
   /** Each benchmark's move over the same window the members are measured on. */
   benchmarks: { spy: number | null; qqq: number | null };
   unpriced: number;
+  /** Held positions using saved prices. Their ranking is provisional. */
+  stale?: number;
+  /** Oldest successful observation among the held prices used to value the club. */
+  pricesAsOf?: string | null;
   /**
    * Members with no portfolio in this season, and therefore no row.
    *

@@ -39,6 +39,7 @@ export interface ClubPortfolio {
 /** What a symbol is worth now, and what it closed at yesterday. */
 export interface Mark {
   price: number;
+  stale?: boolean;
   /** Null before the first print of a session, or on a symbol nothing prices. */
   prevClose: number | null;
 }
@@ -75,6 +76,8 @@ export interface LeaderboardRow {
   top: TopHolding | null;
   /** Positions carried at average cost because nothing could price them. */
   unpriced: number;
+  /** Positions valued with a previously observed display price. */
+  stale: number;
 }
 
 export interface ClubSummary {
@@ -153,12 +156,14 @@ function valueMember(
 
   let dayPnl = 0;
   let unpriced = 0;
+  let stale = 0;
   let top: TopHolding | null = null;
 
   for (const position of portfolio.positions) {
     const mark = marks.get(position.symbol);
     const price = prices[position.symbol] ?? position.avgCost;
-    if (!mark) unpriced += 1;
+    if (prices[position.symbol] === undefined) unpriced += 1;
+    else if (mark?.stale) stale += 1;
 
     // One contract is a hundred shares, and every money line below has to carry
     // that. `gross` comes out of marketValues(), which already does — so
@@ -216,6 +221,7 @@ function valueMember(
     excess: benchmarkReturn === null ? null : round(totalReturn - benchmarkReturn, 2),
     top,
     unpriced,
+    stale,
   };
 }
 

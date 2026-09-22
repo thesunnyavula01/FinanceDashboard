@@ -1,6 +1,6 @@
 import { providerFromEnv } from "./router.ts";
 import { BoundedCache } from "../lib/cache.ts";
-import type { DailyBar } from "./provider.ts";
+import { MarketDataMap, type DailyBar } from "./provider.ts";
 
 /**
  * Daily bars, cached.
@@ -32,6 +32,8 @@ const TTL_MS = 15 * 60_000;
 
 /** Bars are cheap in bulk and the provider batches them, so ask widely. */
 export const MAX_BAR_SYMBOLS = 120;
+/** Leave room for database reads, paged providers, and live marks in one Worker request. */
+export const MAX_SYMBOL_EDGE_ENTRIES = 4;
 
 interface BarsEnv {
   ALPACA_API_KEY_ID?: string;
@@ -43,6 +45,7 @@ interface CacheEntry {
   bars: DailyBar[];
   cachedAt: number;
 }
+interface BatchCacheEntry { entries: Record<string, CacheEntry> }
 
 /**
  * How many symbol-series the isolate keeps.
@@ -66,18 +69,18 @@ function edgeKey(key: string): string {
   return `https://bar-cache.invalid/v2/${key}`;
 }
 
-async function readEdge(key: string): Promise<CacheEntry | null> {
+async function readEdge<T>(key: string): Promise<T | null> {
   if (typeof caches === "undefined") return null;
   try {
     const hit = await caches.default.match(edgeKey(key));
-    return hit ? ((await hit.json()) as CacheEntry) : null;
+    return hit ? ((await hit.json()) as T) : null;
   } catch {
     // A cache that misbehaves is a miss, never an outage.
     return null;
   }
 }
 
-async function writeEdge(key: string, entry: CacheEntry): Promise<void> {
+async function writeEdge(key: string, entry: CacheEntry | BatchCacheEntry): Promise<void> {
   if (typeof caches === "undefined") return;
   try {
     await caches.default.put(
@@ -107,15 +110,21 @@ export async function dailyBars(
   start: string,
   end: string,
   waitUntil?: (promise: Promise<unknown>) => void,
-): Promise<Map<string, DailyBar[]>> {
+): Promise<MarketDataMap<DailyBar[]>> {
   const feed = env.ALPACA_DATA_FEED || "iex";
   const wanted = [...new Set(symbols.map((s) => s.trim().toUpperCase()).filter(Boolean))].slice(
     0,
     MAX_BAR_SYMBOLS,
   );
 
-  const out = new Map<string, DailyBar[]>();
+  const out = new MarketDataMap<DailyBar[]>();
   if (wanted.length === 0) return out;
+  // Cache API operations consume the Worker's subrequest budget too. A large
+  // portfolio must not spend that budget on one lookup and write per symbol.
+  // Sort only the key: callers retain their priority order and per-symbol age.
+  const batchKey = wanted.length > MAX_SYMBOL_EDGE_ENTRIES
+    ? cacheKey(feed, `batch/${encodeURIComponent([...wanted].sort().join(","))}`, start, end) : null;
+  const entries = new Map<string, CacheEntry>();
 
   const now = Date.now();
   const missing: string[] = [];
@@ -125,6 +134,7 @@ export async function dailyBars(
     const entry = memory.get(key);
     if (entry && now - entry.cachedAt < TTL_MS) {
       out.set(symbol, entry.bars);
+      entries.set(symbol, entry);
     } else {
       // Dropped rather than left to age out of the cap: a stale entry that is
       // never asked for again would otherwise hold a season of bars until it
@@ -136,14 +146,16 @@ export async function dailyBars(
 
   const stillMissing: string[] = [];
   if (missing.length > 0) {
-    const found = await Promise.all(
-      missing.map((symbol) => readEdge(cacheKey(feed, symbol, start, end))),
+    const batch = batchKey ? await readEdge<BatchCacheEntry>(batchKey) : null;
+    const found = batchKey ? missing.map((symbol) => batch?.entries?.[symbol]) : await Promise.all(
+      missing.map((symbol) => readEdge<CacheEntry>(cacheKey(feed, symbol, start, end))),
     );
     for (let i = 0; i < missing.length; i++) {
       const symbol = missing[i]!;
       const entry = found[i];
       if (entry && now - entry.cachedAt < TTL_MS) {
         memory.set(cacheKey(feed, symbol, start, end), entry);
+        entries.set(symbol, entry);
         out.set(symbol, entry.bars);
       } else {
         stillMissing.push(symbol);
@@ -154,18 +166,27 @@ export async function dailyBars(
   if (stillMissing.length === 0) return out;
 
   const fetched = await providerFromEnv(env).dailyBars(stillMissing, { start, end });
+  // An outage is different from a valid empty history. Preserve the router's
+  // failure metadata so snapshots cannot persist cost marks as official closes.
+  if (fetched instanceof MarketDataMap) {
+    for (const symbol of fetched.unavailable) out.unavailable.add(symbol);
+  }
   const writes: Promise<unknown>[] = [];
 
   for (const symbol of stillMissing) {
-    const bars = fetched.get(symbol);
+    const bars: DailyBar[] | undefined = fetched.get(symbol);
     if (!bars || bars.length === 0) continue;
 
     bars.sort((a, b) => a.date.localeCompare(b.date));
     const entry: CacheEntry = { bars, cachedAt: now };
     memory.set(cacheKey(feed, symbol, start, end), entry);
+    entries.set(symbol, entry);
     out.set(symbol, bars);
-    writes.push(writeEdge(cacheKey(feed, symbol, start, end), entry));
+    if (!batchKey) writes.push(writeEdge(cacheKey(feed, symbol, start, end), entry));
   }
+  // Each timestamp stays attached to its own series: refreshing one symbol
+  // cannot extend the lifetime of the other series copied into this envelope.
+  if (batchKey && entries.size > 0) writes.push(writeEdge(batchKey, { entries: Object.fromEntries(entries) }));
 
   if (writes.length > 0) {
     const write = Promise.all(writes);

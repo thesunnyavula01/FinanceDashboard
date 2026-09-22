@@ -1,6 +1,6 @@
 import { providerFromEnv } from "./router.ts";
 import { BoundedCache } from "../lib/cache.ts";
-import type { BarTimeframe, IntradayBar } from "./provider.ts";
+import { MarketDataMap, type BarTimeframe, type IntradayBar } from "./provider.ts";
 
 /**
  * Intraday bars, cached.
@@ -47,6 +47,8 @@ export const INTRADAY_TIMEFRAME: BarTimeframe = "5Min";
  * ten-thousand-bar response on the way to drawing 78 points is wasted work.
  */
 export const MAX_INTRADAY_SYMBOLS = 60;
+/** Cache API operations share the same finite request budget as provider calls. */
+export const MAX_SYMBOL_EDGE_ENTRIES = 4;
 
 interface IntradayEnv {
   ALPACA_API_KEY_ID?: string;
@@ -58,6 +60,7 @@ interface CacheEntry {
   bars: IntradayBar[];
   cachedAt: number;
 }
+interface BatchCacheEntry { entries: Record<string, CacheEntry> }
 
 /**
  * How many symbol-sessions the isolate keeps.
@@ -78,18 +81,18 @@ function edgeKey(key: string): string {
   return `https://intraday-cache.invalid/v2/${key}`;
 }
 
-async function readEdge(key: string): Promise<CacheEntry | null> {
+async function readEdge<T>(key: string): Promise<T | null> {
   if (typeof caches === "undefined") return null;
   try {
     const hit = await caches.default.match(edgeKey(key));
-    return hit ? ((await hit.json()) as CacheEntry) : null;
+    return hit ? ((await hit.json()) as T) : null;
   } catch {
     // A cache that misbehaves is a miss, never an outage.
     return null;
   }
 }
 
-async function writeEdge(key: string, entry: CacheEntry): Promise<void> {
+async function writeEdge(key: string, entry: CacheEntry | BatchCacheEntry): Promise<void> {
   if (typeof caches === "undefined") return;
   try {
     await caches.default.put(
@@ -118,15 +121,18 @@ export async function intradayBars(
   symbols: string[],
   start: string,
   waitUntil?: (promise: Promise<unknown>) => void,
-): Promise<Map<string, IntradayBar[]>> {
+): Promise<MarketDataMap<IntradayBar[]>> {
   const feed = env.ALPACA_DATA_FEED || "iex";
   const wanted = [...new Set(symbols.map((s) => s.trim().toUpperCase()).filter(Boolean))].slice(
     0,
     MAX_INTRADAY_SYMBOLS,
   );
 
-  const out = new Map<string, IntradayBar[]>();
+  const out = new MarketDataMap<IntradayBar[]>();
   if (wanted.length === 0) return out;
+  const batchKey = wanted.length > MAX_SYMBOL_EDGE_ENTRIES
+    ? cacheKey(feed, INTRADAY_TIMEFRAME, `batch/${encodeURIComponent([...wanted].sort().join(","))}`, start) : null;
+  const entries = new Map<string, CacheEntry>();
 
   const now = Date.now();
   const key = (symbol: string) => cacheKey(feed, INTRADAY_TIMEFRAME, symbol, start);
@@ -136,6 +142,7 @@ export async function intradayBars(
     const entry = memory.get(key(symbol));
     if (entry && now - entry.cachedAt < TTL_MS) {
       out.set(symbol, entry.bars);
+      entries.set(symbol, entry);
     } else {
       // A sixty-second TTL means most reads find a stale entry, so dropping it
       // here is what keeps yesterday's window from riding along until the cap
@@ -147,12 +154,15 @@ export async function intradayBars(
 
   const stillMissing: string[] = [];
   if (missing.length > 0) {
-    const found = await Promise.all(missing.map((symbol) => readEdge(key(symbol))));
+    const batch = batchKey ? await readEdge<BatchCacheEntry>(batchKey) : null;
+    const found = batchKey ? missing.map((symbol) => batch?.entries?.[symbol])
+      : await Promise.all(missing.map((symbol) => readEdge<CacheEntry>(key(symbol))));
     for (let i = 0; i < missing.length; i++) {
       const symbol = missing[i]!;
       const entry = found[i];
       if (entry && now - entry.cachedAt < TTL_MS) {
         memory.set(key(symbol), entry);
+        entries.set(symbol, entry);
         out.set(symbol, entry.bars);
       } else {
         stillMissing.push(symbol);
@@ -168,19 +178,24 @@ export async function intradayBars(
     start,
     timeframe: INTRADAY_TIMEFRAME,
   });
+  if (fetched instanceof MarketDataMap) {
+    for (const symbol of fetched.unavailable) out.unavailable.add(symbol);
+  }
 
   const writes: Promise<unknown>[] = [];
 
   for (const symbol of stillMissing) {
-    const bars = fetched.get(symbol);
+    const bars: IntradayBar[] | undefined = fetched.get(symbol);
     if (!bars || bars.length === 0) continue;
 
     bars.sort((a, b) => a.at.localeCompare(b.at));
     const entry: CacheEntry = { bars, cachedAt: now };
     memory.set(key(symbol), entry);
+    entries.set(symbol, entry);
     out.set(symbol, bars);
-    writes.push(writeEdge(key(symbol), entry));
+    if (!batchKey) writes.push(writeEdge(key(symbol), entry));
   }
+  if (batchKey && entries.size > 0) writes.push(writeEdge(batchKey, { entries: Object.fromEntries(entries) }));
 
   if (writes.length > 0) {
     const write = Promise.all(writes);

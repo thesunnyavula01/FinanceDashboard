@@ -286,7 +286,8 @@ The original plan said KV. It is the wrong store for this, and
 1. **Isolate memory** - a Map, free and instant, absorbs every member served by
    the same Worker instance.
 2. **The Cache API** (`caches.default`) - colo-local, shared across isolates,
-   no operation limits and no per-write billing.
+   with no per-write billing. Its operations count toward the Worker's finite
+   subrequest budget, including cache misses; they are not free requests.
 3. **Alpaca**, batched 100 symbols per request.
 
 KV cannot do tier 2. A 20s TTL over ~200 symbols is roughly **234,000 writes a
@@ -300,6 +301,15 @@ A concurrent-fetch guard sits in front of tier 3, so twenty members arriving
 together on a cold cache produce one upstream request rather than twenty. A
 symbol nothing can price is negative-cached for 5 minutes, so one typo in a
 portfolio does not poll Alpaca every 20 seconds for the rest of the season.
+
+**Batch the cache too.** Quotes, daily bars and intraday bars use individual
+edge entries for at most four symbols. Larger requests use one edge envelope
+keyed by the sorted symbol set (and feed/window). Each embedded entry keeps its
+own timestamp; refreshing one symbol cannot renew another. Isolate memory stays
+per symbol. The four-symbol threshold leaves room for all three caches in a
+single history request. The 83-symbol leaderboard previously exhausted the
+50-subrequest limit on cache lookups before Alpaca could run, then silently
+ranked books at cost. This was captured in deployed Worker logs, not inferred.
 
 A failed provider request is different from a successful response with no price:
 failures retry after the ordinary quote TTL, including in the edge cache. They
@@ -651,7 +661,10 @@ than a block.
 `symbol -> price` for every position the member holds, fetched from the same
 quote cache the dashboard polls. Without it a short would be margined at what it
 was sold for, understating the requirement on exactly the position that has moved
-against the member. A symbol missing from the map falls back to its average cost.
+against the member. SQL retains an average-cost fallback, so opening BUY/SHORT
+requests must be stopped in the Worker if any existing short lacks a live mark.
+SELL/COVER remain available to reduce exposure. Saved display prices never enter
+either execution path. Incomplete or failed holdings reads abort risk checks.
 
 **Dollar amounts round down, never up.** A $500 order must never cost $500.01.
 Same for a whole-share-only symbol, where less than one share is a rejection
@@ -704,6 +717,13 @@ the equity sweep, two sweeps could read the same PENDING row, and the loser's
 an order that had just filled. One sweep, always. The idle cost stays at one
 indexed query because the sweep selects pending orders *before* it fetches the
 clock and returns early when there are none.
+
+The sweep also budgets the entire invocation, including cache operations and
+the worst trail/trigger/fill/reject sequence. Orders beyond that budget remain
+pending for the next minute. The starting point rotates through stable pending
+rows, with a minute-based seed on a cold isolate, so long-lived trailing stops
+cannot always consume the budget ahead of later orders. Failed DAY expiration
+aborts the sweep; a failed rejection is still reported as resting.
 
 ### Order flow
 
@@ -866,9 +886,13 @@ existing asset-class router, so stock, crypto and option history go to their own
 endpoints. Tests cover the actual cache entry points, mixed holdings and partial
 venue failures, rather than only the router in isolation.
 
-Only the display endpoint reads saved prices. The order engine continues to use
-the live quote cache. Backups never restore cash, holdings or trades automatically:
-a quote outage must not undo legitimate trades made since a checkpoint.
+The quote display endpoint and leaderboard share `display-quotes.ts`, retaining
+the newest observed price in bounded isolate memory and falling back to the
+price-only KV copy. Saved display prices retain their timestamps for up to seven
+days to bridge weekends and outages; private checkpoints still expire after
+24 hours. Benchmarks are included in the price-only copy. Neither execution nor
+the order sweep reads saved display prices. Backups never restore cash, holdings
+or trades automatically: a quote outage must not undo legitimate trades.
 
 ### The equity curve is reconstructed, not just read
 
@@ -1005,6 +1029,12 @@ replaying Tuesday, and `mergeSnapshots()` prefers a snapshot to a replay
 precisely because it was computed at the close against marks that were real. A
 replay wearing a snapshot's clothes would quietly retire that guarantee, and the
 replay already covers the gap. The job writes today or it writes nothing.
+
+A partial venue failure counts as a failed feed too. Daily/intraday caches keep
+the provider's unavailable-symbol flags through both cache tiers and batched
+reads. Any such failure cancels all snapshot writes; history marks the result
+degraded. A successful empty series (for example a thin option) remains distinct
+from a provider outage.
 
 **The trading-day gate is a SPY bar dated today** — the same fact the chart's
 x-axis is built from. Holidays and weekends fail it without a holiday list
@@ -1145,6 +1175,22 @@ to the viewport would crush them, so the height goes back to a floor and
 ---
 
 ## Leaderboard
+
+### A ranking needs market prices
+
+No standings are published if even one held symbol has no current or usable
+saved market price. Purchase cost is not a valid substitute for ranking members:
+it erases unrealized gains and losses. The route returns `PRICES_UNAVAILABLE`
+(503), retaining the browser's last complete ranking until a refresh succeeds.
+Saved marks carry row/aggregate `stale` counts and the oldest held observation
+as `pricesAsOf`; F3 labels the ranking provisional. Missing benchmarks are
+labelled unavailable, independently of whether the members can be ranked.
+
+The screenshot with Samuel first at +5.58% and Saras absent from the top was
+reproduced exactly by removing all marks. With prices, Saras's unchanged book
+was $114,365.49 (+14.37%), first. The corrected local handler against live data
+used 12 counted requests, including Cache API calls and an auth reserve, under
+an enforced 50-request ceiling. See `PLANNING/LEADERBOARD-PRICE-OUTAGE-AUDIT.md`.
 
 ### Ranked by return, and priced on the server
 

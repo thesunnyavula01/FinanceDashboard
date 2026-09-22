@@ -1,5 +1,13 @@
 # Leaderboard and Research investigation — 2026-09-21
 
+**Follow-up correction:** this pass did not resolve the reported ranking failure.
+Its live check ran without a Cloudflare Cache API, and its missing-quote test
+checked row counts rather than valuations. Both missed the production
+subrequest exhaustion and the cost-based ranking that exactly reproduces the
+user's screenshot. The cache race here is real, but was not the explanation for
+that screenshot. See `LEADERBOARD-PRICE-OUTAGE-AUDIT.md` for the deployed-log
+evidence, price comparison and corrected resource-budget tests.
+
 The report was intermittent missing leaderboard members, sometimes restored by
 refreshing, beginning after Research. Reviewed the frontend routes, hooks,
 shared components and query lifecycle; Worker routes and caches; research and

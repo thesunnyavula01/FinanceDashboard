@@ -6,7 +6,7 @@ import { activeSeason, type Season } from "../lib/portfolio.ts";
 import { benchmarkMove, rankClub, type ClubPortfolio, type Mark } from "../lib/leaderboard.ts";
 import { BENCHMARKS } from "../analytics/curve.ts";
 import { dailyBars } from "../market/bars.ts";
-import { quoteCache } from "../market/quotes.ts";
+import { displayQuotes } from "../market/display-quotes.ts";
 import { exchangeDate } from "../market/provider.ts";
 import type { Env } from "../types.ts";
 
@@ -63,6 +63,8 @@ interface Standings {
   benchmarks: { spy: number | null; qqq: number | null };
   /** Positions across the club that nothing could price. */
   unpriced: number;
+  stale: number;
+  pricesAsOf: string | null;
   /**
    * Members of the club with no portfolio in this season.
    *
@@ -129,6 +131,9 @@ leaderboard.get("/", async (c) => {
     return c.json(standings);
   } catch (err) {
     console.error("leaderboard build failed:", err);
+    if (err instanceof UnpricedStandingsError) {
+      return c.json({ error: err.message, code: "PRICES_UNAVAILABLE" }, 503);
+    }
     return c.json({ error: "Could not load the standings." }, 500);
   }
 });
@@ -226,12 +231,16 @@ async function buildStandings(
   const held = [...new Set(portfolios.flatMap((p) => p.positions.map((pos) => pos.symbol)))];
   const symbols = [...new Set([...held, ...BENCHMARKS])];
 
-  const { quotes } = await quoteCache(env).get(symbols, waitUntil);
+  const { quotes } = await displayQuotes(env, symbols, waitUntil);
+  const unpriced = held.filter((symbol) => !quotes.has(symbol));
+  if (unpriced.length) {
+    throw new UnpricedStandingsError(`Standings could not refresh because prices are unavailable for ${unpriced.length} held symbol${unpriced.length === 1 ? "" : "s"}. Try again shortly.`);
+  }
 
   const marks = new Map<string, Mark>(
     [...quotes].map(([symbol, quote]) => [
       symbol,
-      { price: quote.price, prevClose: quote.prevClose },
+      { price: quote.price, prevClose: quote.prevClose, stale: quote.stale },
     ]),
   );
 
@@ -252,11 +261,15 @@ async function buildStandings(
     summary,
     benchmarks,
     unpriced: rows.reduce((sum, row) => sum + row.unpriced, 0),
+    stale: rows.reduce((sum, row) => sum + row.stale, 0),
+    pricesAsOf: held.map((symbol) => quotes.get(symbol)!.receivedAt).sort()[0] ?? null,
     missing,
     truncated,
     asOf: new Date().toISOString(),
   };
 }
+
+class UnpricedStandingsError extends Error {}
 
 /**
  * Read membership and books in one database snapshot. Separate roster and
@@ -400,6 +413,8 @@ function emptyStandings(note: string): Standings {
     },
     benchmarks: { spy: null, qqq: null },
     unpriced: 0,
+    stale: 0,
+    pricesAsOf: null,
     missing: [],
     truncated: false,
     asOf: new Date().toISOString(),

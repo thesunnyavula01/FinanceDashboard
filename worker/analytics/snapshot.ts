@@ -2,7 +2,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { activeSeason } from "../lib/portfolio.ts";
 import { ConfigError, serviceClient } from "../lib/supabase.ts";
 import { dailyBars, MAX_BAR_SYMBOLS } from "../market/bars.ts";
-import { exchangeDate, type DailyBar } from "../market/provider.ts";
+import { exchangeDate, MarketDataMap, type DailyBar } from "../market/provider.ts";
 import { marketValues, round, type Position } from "../orders/engine.ts";
 import type { Env } from "../types.ts";
 import { BENCHMARKS, shiftDate } from "./curve.ts";
@@ -134,9 +134,12 @@ export async function snapshotSeason(
     ]),
   ];
 
-  let bars: Map<string, DailyBar[]>;
+  let bars: MarketDataMap<DailyBar[]>;
   try {
     bars = await fetchBars(env, symbols, from, today, waitUntil);
+    if (bars.unavailable.size > 0) {
+      throw new Error(`Daily bars failed for ${bars.unavailable.size} symbols.`);
+    }
   } catch (err) {
     // Nothing is written on a bad price feed. A gap in the table is repaired by
     // the replay; a row full of average costs recorded as though it were a set
@@ -328,12 +331,13 @@ async function fetchBars(
   from: string,
   to: string,
   waitUntil?: (promise: Promise<unknown>) => void,
-): Promise<Map<string, DailyBar[]>> {
-  const out = new Map<string, DailyBar[]>();
+): Promise<MarketDataMap<DailyBar[]>> {
+  const out = new MarketDataMap<DailyBar[]>();
 
   for (let i = 0; i < symbols.length; i += MAX_BAR_SYMBOLS) {
     const batch = await dailyBars(env, symbols.slice(i, i + MAX_BAR_SYMBOLS), from, to, waitUntil);
     for (const [symbol, series] of batch) out.set(symbol, series);
+    for (const symbol of batch.unavailable) out.unavailable.add(symbol);
   }
 
   return out;

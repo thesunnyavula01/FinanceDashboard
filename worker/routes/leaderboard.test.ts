@@ -5,6 +5,10 @@ import worker from "../index.ts";
 import { forgetStandings } from "./leaderboard.ts";
 import { forgetSeason } from "../lib/portfolio.ts";
 import { forgetBars } from "../market/bars.ts";
+import { forgetDisplayQuotes } from "../market/display-quotes.ts";
+import { SAVED_PRICES_KEY, type SavedPrices } from "../analytics/backup.ts";
+import type { LeaderboardRow } from "../lib/leaderboard.ts";
+import type { Quote } from "../market/provider.ts";
 import type { Env } from "../types.ts";
 
 const SECRET = "test-leaderboard-session-secret";
@@ -30,10 +34,13 @@ function deferred() {
 }
 
 interface Body {
-  rows?: { userId: string }[];
+  rows?: LeaderboardRow[];
   missing?: { userId: string }[];
   unpriced?: number;
+  stale?: number;
+  pricesAsOf?: string | null;
   error?: string;
+  code?: string;
 }
 
 interface Fixture {
@@ -44,22 +51,50 @@ interface Fixture {
   portfolioFailure: boolean;
   rosterFailure: boolean;
   reads: { seasons: number; portfolios: number; profiles: number };
+  prices: Record<string, { price: number; prevClose: number }>;
+  savedPrices: SavedPrices;
+  marketFailure: boolean;
+  quoteBatches: string[][];
+  now: () => number;
+  advance: (ms: number) => void;
+  subrequests: number;
+  enforceBudget: () => void;
   beforeClub?: (read: number) => Promise<void>;
   request: (signedIn?: boolean) => Promise<{ status: number; body: Body; cacheControl: string | null }>;
 }
 
 async function fixture(run: (state: Fixture) => Promise<void>) {
   const savedFetch = globalThis.fetch;
+  const savedNow = Date.now;
+  let now = savedNow();
+  let budgeted = false;
+  const edge = new Map<string, string>();
+  const spend = () => {
+    state.subrequests += 1;
+    if (budgeted && state.subrequests > 50) throw new Error("Too many subrequests");
+  };
   const savedCaches = Object.getOwnPropertyDescriptor(globalThis, "caches");
   const env = { SUPABASE_URL: "https://leaderboard.example", SUPABASE_JWT_SECRET: SECRET,
     SUPABASE_SERVICE_ROLE_KEY: "test-service-key", ALPACA_API_KEY_ID: crypto.randomUUID(),
-    ALPACA_API_SECRET_KEY: "test-key", QUOTES: { get: async () => null },
+    ALPACA_API_SECRET_KEY: "test-key", QUOTES: { get: async (key: string) => {
+      spend();
+      return key === SAVED_PRICES_KEY ? state.savedPrices : null;
+    } },
     ASSETS: { fetch: async () => new Response("SPA") } } as unknown as Env;
   const state: Fixture = {
     portfolios: [book("member-one"), book("member-two")],
     roster: ["member-one", "member-two"].map((id) => ({ id, display_name: id })),
     portfolioFailure: false, rosterFailure: false,
     reads: { seasons: 0, portfolios: 0, profiles: 0 },
+    prices: {}, savedPrices: {}, marketFailure: false, quoteBatches: [],
+    now: () => now, advance: (ms) => { now += ms; }, subrequests: 0,
+    enforceBudget: () => {
+      budgeted = true;
+      Object.defineProperty(globalThis, "caches", { configurable: true, value: { default: {
+        async match(key: unknown) { spend(); const body = edge.get(String(key)); return body === undefined ? undefined : new Response(body); },
+        async put(key: unknown, response: Response) { spend(); edge.set(String(key), await response.text()); },
+      } } });
+    },
     request: async (signedIn = true) => {
       const background: Promise<unknown>[] = [];
       const response = await worker.fetch(new Request("https://terminal.example/api/leaderboard", {
@@ -79,9 +114,11 @@ async function fixture(run: (state: Fixture) => Promise<void>) {
     return new Response(JSON.stringify(body), { headers });
   };
   try {
-    forgetStandings(); forgetSeason(); forgetBars();
+    forgetStandings(); forgetSeason(); forgetBars(); forgetDisplayQuotes();
+    Date.now = () => now;
     Object.defineProperty(globalThis, "caches", { configurable: true, value: undefined });
     globalThis.fetch = async (input, init) => {
+      spend();
       const url = new URL(typeof input === "string" || input instanceof URL ? String(input) : input.url);
       if (url.pathname.endsWith("/seasons")) {
         state.reads.seasons += 1;
@@ -110,18 +147,77 @@ async function fixture(run: (state: Fixture) => Promise<void>) {
         if (failed) return new Response(JSON.stringify({ message: "Club read unavailable" }), { status: 500 });
         return json(captured, count);
       }
-      // A quote outage may change valuation quality, never membership.
-      if (url.pathname.endsWith("/stocks/snapshots")) return json({});
+      if (url.pathname.endsWith("/stocks/snapshots")) {
+        const symbols = (url.searchParams.get("symbols") ?? "").split(",");
+        state.quoteBatches.push(symbols);
+        if (state.marketFailure) return new Response("Market data temporarily unavailable", { status: 503 });
+        return json(Object.fromEntries(symbols.flatMap((symbol) => {
+          const price = state.prices[symbol];
+          if (!price) return [];
+          const at = new Date(now).toISOString();
+          return [[symbol, {
+            latestTrade: { p: price.price, t: at },
+            dailyBar: { c: price.price, o: price.prevClose, h: price.price, l: price.prevClose, v: 100, t: at },
+            prevDailyBar: { c: price.prevClose, t: new Date(now - 86_400_000).toISOString() },
+          }]];
+        })));
+      }
       if (url.pathname.endsWith("/stocks/bars")) return json({ bars: {} });
       throw new Error(`Unexpected fixture request: ${url.pathname}`);
     };
     await run(state);
   } finally {
     globalThis.fetch = savedFetch;
+    Date.now = savedNow;
     if (savedCaches) Object.defineProperty(globalThis, "caches", savedCaches);
     else Reflect.deleteProperty(globalThis, "caches");
-    forgetStandings(); forgetSeason(); forgetBars();
+    forgetStandings(); forgetSeason(); forgetBars(); forgetDisplayQuotes();
   }
+}
+
+// Read-only production observations supplied during this investigation. The
+// second account is a synthetic cash-only comparator for the screenshot's
+// +5.58% threshold; this is not a reconstruction of Samuel's actual holdings.
+const SARAS_POSITIONS = [
+  { symbol: "IREN", qty: 814.553353, avg_cost: 36.83, price: 47.22, prevClose: 46.705 },
+  { symbol: "ASTS", qty: 448.149144, avg_cost: 55.785, price: 61.86, prevClose: 58.5 },
+  { symbol: "RKLB", qty: 319.667545, avg_cost: 62.565, price: 69.925, prevClose: 64.575 },
+  { symbol: "CRSP", qty: 263.898662, avg_cost: 56.84, price: 58.34, prevClose: 56.53 },
+  { symbol: "OKLO", qty: 259.740259, avg_cost: 38.5, price: 40.16, prevClose: 38.01 },
+];
+
+function screenshotBooks(state: Fixture): void {
+  const saras = book("saras"), comparator = book("screenshot-comparator");
+  saras.cash = 0;
+  saras.positions = SARAS_POSITIONS.map(({ symbol, qty, avg_cost }) => ({ symbol, qty, avg_cost, multiplier: 1 }));
+  saras.position_count = [{ count: saras.positions.length }];
+  comparator.cash = 105_584.50;
+  state.portfolios = [saras, comparator];
+  state.roster = [{ id: "saras", display_name: "Saras" }, { id: comparator.user_id, display_name: "Screenshot comparator" }];
+  state.prices = Object.fromEntries(SARAS_POSITIONS.map(({ symbol, price, prevClose }) => [symbol, { price, prevClose }]));
+}
+
+function saveObservedPrices(state: Fixture, savedAt: string, symbols = SARAS_POSITIONS.map((row) => row.symbol)): void {
+  for (const symbol of symbols) {
+    const observed = SARAS_POSITIONS.find((row) => row.symbol === symbol)!;
+    const quote: Quote = {
+      symbol, price: observed.price, prevClose: observed.prevClose, source: "bar",
+      dayChange: observed.price - observed.prevClose,
+      dayChangePercent: (observed.price / observed.prevClose - 1) * 100,
+      dayOpen: observed.prevClose, dayHigh: observed.price, dayLow: observed.prevClose,
+      dayVolume: 100, asOf: savedAt,
+    };
+    state.savedPrices[symbol] = { quote, savedAt };
+  }
+}
+
+function assertSarasFirst(body: Body): void {
+  assert.equal(body.rows?.[0]?.userId, "saras", "price loss must never hand the lead to the +5.58% comparator");
+  assert.equal(body.rows?.[0]?.rank, 1);
+  assert.equal(body.rows?.[0]?.equity, 114_365.49);
+  assert.equal(body.rows?.[0]?.totalReturn, 14.37);
+  assert.equal(body.rows?.[1]?.totalReturn, 5.58);
+  assert.equal(body.unpriced, 0);
 }
 
 test("standings reject signed-out readers before reading the club", async () => {
@@ -131,7 +227,7 @@ test("standings reject signed-out readers before reading the club", async () => 
   });
 });
 
-test("a hundred cold standings polls share one club read and retain every unpriced member", async () => {
+test("a hundred cold standings polls share one club read without fabricating cost-based ranks", async () => {
   await fixture(async (state) => {
     state.portfolios.forEach((portfolio, index) => {
       portfolio.positions = [{ symbol: index === 0 ? "AAPL" : "MSFT", qty: 1, avg_cost: 100, multiplier: 1 }];
@@ -140,15 +236,128 @@ test("a hundred cold standings polls share one club read and retain every unpric
     state.beforeClub = async () => { await new Promise((resolve) => setTimeout(resolve, 50)); };
     const results = await Promise.all(Array.from({ length: 100 }, () => state.request()));
     for (const result of results) {
-      assert.equal(result.status, 200);
+      assert.equal(result.status, 503);
       assert.equal(result.cacheControl, "no-store");
-      assert.deepEqual(result.body.rows?.map((row) => row.userId).sort(), ["member-one", "member-two"]);
-      assert.equal(result.body.unpriced, 2);
+      assert.equal(result.body.code, "PRICES_UNAVAILABLE");
+      assert.equal(result.body.rows, undefined, "missing marks must not publish break-even returns or fabricated leaders");
+      assert.equal(result.body.missing, undefined, "price failure must not claim a missing membership");
     }
     assert.equal(state.reads.portfolios, 0, "roster and books share one database snapshot");
     assert.equal(state.reads.profiles, 1);
     await state.request();
-    assert.equal(state.reads.profiles, 1, "completed standings remain memoised");
+    assert.equal(state.reads.profiles, 2, "an unpriced build must not be memoised as successful standings");
+  });
+});
+
+test("the screenshot book ranks Saras first and keeps that valuation through a live-price outage", async () => {
+  await fixture(async (state) => {
+    screenshotBooks(state);
+    const observedAt = new Date(state.now()).toISOString();
+    const live = await state.request();
+    assert.equal(live.status, 200);
+    assertSarasFirst(live.body);
+    assert.equal(live.body.stale, 0);
+
+    state.advance(21_000);
+    state.marketFailure = true;
+    const outage = await state.request();
+    assert.equal(outage.status, 200);
+    assertSarasFirst(outage.body);
+    assert.equal(outage.body.stale, 5);
+    assert.equal(outage.body.rows?.[0]?.stale, 5);
+    assert.equal(outage.body.rows?.[1]?.stale, 0);
+    assert.equal(outage.body.pricesAsOf, observedAt, "a failed poll must not renew price observation time");
+
+    state.advance(21_000);
+    state.marketFailure = false;
+    const recovered = await state.request();
+    assert.equal(recovered.status, 200);
+    assertSarasFirst(recovered.body);
+    assert.equal(recovered.body.stale, 0);
+    assert.equal(recovered.body.pricesAsOf, new Date(state.now()).toISOString());
+  });
+});
+
+test("a cold isolate uses durable prices across a holiday weekend without replacing Saras's gains with cost", async () => {
+  await fixture(async (state) => {
+    screenshotBooks(state);
+    const oldest = new Date(state.now() - 4 * 86_400_000).toISOString();
+    saveObservedPrices(state, oldest);
+    saveObservedPrices(state, new Date(state.now() - 3 * 86_400_000).toISOString(), ["IREN"]);
+    state.prices = {};
+    const result = await state.request();
+    assert.equal(result.status, 200);
+    assertSarasFirst(result.body);
+    assert.equal(result.body.stale, 5);
+    assert.equal(result.body.pricesAsOf, oldest);
+  });
+});
+
+test("partial venue data combines current and durable marks and reports only saved holdings as stale", async () => {
+  await fixture(async (state) => {
+    screenshotBooks(state);
+    const savedAt = new Date(state.now() - 90_000).toISOString();
+    saveObservedPrices(state, savedAt, ["RKLB", "CRSP", "OKLO"]);
+    for (const symbol of ["RKLB", "CRSP", "OKLO"]) delete state.prices[symbol];
+    const result = await state.request();
+    assert.equal(result.status, 200);
+    assertSarasFirst(result.body);
+    assert.equal(result.body.stale, 3);
+    assert.equal(result.body.rows?.[0]?.stale, 3);
+    assert.equal(result.body.pricesAsOf, savedAt);
+  });
+});
+
+test("one absent held price rejects the whole ranking instead of publishing a partial or cost-valued winner", async () => {
+  await fixture(async (state) => {
+    screenshotBooks(state);
+    delete state.prices.IREN;
+    const result = await state.request();
+    assert.equal(result.status, 503);
+    assert.equal(result.body.code, "PRICES_UNAVAILABLE");
+    assert.equal(result.body.rows, undefined);
+    assert.equal(result.body.missing, undefined);
+  });
+});
+
+test("expired durable prices are rejected and a later provider recovery releases the failed ranking", async () => {
+  await fixture(async (state) => {
+    screenshotBooks(state);
+    saveObservedPrices(state, new Date(state.now() - 8 * 86_400_000).toISOString());
+    state.marketFailure = true;
+    const failed = await state.request();
+    assert.equal(failed.status, 503);
+    assert.equal(failed.body.rows, undefined);
+    state.advance(21_000);
+    state.marketFailure = false;
+    const recovered = await state.request();
+    assert.equal(recovered.status, 200);
+    assertSarasFirst(recovered.body);
+    assert.equal(recovered.body.stale, 0);
+    assert.equal(state.reads.profiles, 2);
+  });
+});
+
+test("the real leaderboard prices 83 symbols within the Worker's shared 50-subrequest budget", async () => {
+  await fixture(async (state) => {
+    screenshotBooks(state);
+    const extra = book("broad-portfolio");
+    extra.positions = Array.from({ length: 76 }, (_, index) => ({ symbol: `SYM${index}`, qty: 1, avg_cost: 100, multiplier: 1 }));
+    extra.cash -= extra.positions.length * 100;
+    extra.position_count = [{ count: extra.positions.length }];
+    for (const position of extra.positions) state.prices[position.symbol] = { price: 100, prevClose: 100 };
+    for (const symbol of ["SPY", "QQQ"]) state.prices[symbol] = { price: 100, prevClose: 100 };
+    state.portfolios.push(extra);
+    state.roster.push({ id: extra.user_id, display_name: "Broad portfolio" });
+    state.enforceBudget();
+    const result = await state.request();
+    assert.equal(result.status, 200);
+    assertSarasFirst(result.body);
+    assert.equal(result.body.rows?.length, 3);
+    assert.equal(state.quoteBatches.length, 1);
+    assert.equal(state.quoteBatches[0]?.length, 83);
+    assert.ok(state.subrequests <= 50, `used ${state.subrequests} subrequests across database, cache and providers`);
+    assert.equal(result.body.stale, 0);
   });
 });
 

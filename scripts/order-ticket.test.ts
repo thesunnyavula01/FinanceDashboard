@@ -19,12 +19,15 @@ const compiled = await build({
       import { MemoryRouter } from 'react-router-dom';
       import { Positions } from './src/routes/Positions';
       export { estimateReservation, valuePortfolio };
-      export function renderPositions(saved = true) {
+      export function renderPositions(saved = true, sharedNewer = false) {
         const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
         client.setQueryData(['portfolio'], { positions: [{ symbol: 'AAPL', qty: 2, avgCost: 100, multiplier: 1 }],
           portfolio: { cash: 1000, startingCash: 1200, season: {} } });
         client.setQueryData(['working-orders'], { orders: [], reservedCash: 0 });
         client.setQueryData(['quotes', ['AAPL']], { quotes: saved ? { AAPL: { symbol: 'AAPL', price: 150, prevClose: 140, stale: true, receivedAt: '2026-09-15T15:00:00Z' } } : {}, unknown: [] });
+        if (sharedNewer) client.setQueryData(['last-good-quotes'], { AAPL: {
+          symbol: 'AAPL', price: 170, prevClose: 140, receivedAt: '2026-09-15T15:05:00Z'
+        } });
         client.setQueryData(['securities', ['AAPL']], { securities: {}, pending: [] });
         client.setQueryData(['history', '1D'], { rows: [], range: '1D' });
         const html = renderToStaticMarkup(React.createElement(QueryClientProvider, { client },
@@ -52,7 +55,7 @@ const compiled = await build({
   jsx: "automatic", define: { "import.meta.env": "{}" },
   tsconfig: fileURLToPath(new URL("../tsconfig.app.json", import.meta.url)),
 });
-const module = { exports: {} as { render: (initial: object, cash?: number) => string; renderPositions: (saved?: boolean) => string; estimateReservation: (input: object) => { cash: number }; valuePortfolio: (input: object) => { rows: { last: number; pnl: number; stale: boolean; priceStatus: string }[]; totals: { equity: number } } } };
+const module = { exports: {} as { render: (initial: object, cash?: number) => string; renderPositions: (saved?: boolean, sharedNewer?: boolean) => string; estimateReservation: (input: object) => { cash: number }; valuePortfolio: (input: object) => { rows: { last: number; pnl: number; stale: boolean; priceStatus: string }[]; totals: { equity: number } } } };
 new Function("require", "module", "exports", compiled.outputFiles[0]!.text)(createRequire(import.meta.url), module, module.exports);
 const { render, estimateReservation } = module.exports;
 
@@ -65,6 +68,13 @@ test("Positions renders saved prices with readable status instead of ticker ques
   const cost = module.exports.renderPositions(false);
   assert.match(cost, />Cost<\/span>/);
   assert.match(cost, /unpriced holdings marked Cost/);
+});
+
+test("Positions uses the newer price remembered by another quote query", () => {
+  const html = module.exports.renderPositions(true, true);
+  assert.match(html, /170\.00/);
+  assert.doesNotMatch(html, /150\.00/);
+  assert.match(html, /1,340\.00/, "cash plus the two shares uses the newer mark");
 });
 
 test("a retained quote values holdings at the saved price instead of reverting to purchase cost", () => {

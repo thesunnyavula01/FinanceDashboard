@@ -1,5 +1,23 @@
 # Deploying to Cloudflare
 
+## Leaderboard price outage correction
+
+The leaderboard requires market prices for every holding. Its quote and history
+caches now batch edge operations as well as provider calls, keeping the full
+request within Cloudflare's subrequest budget. Saved prices are explicitly
+labelled; missing held prices fail the refresh rather than rank at purchase cost.
+The price-only KV copy now retains original observations for up to seven days,
+including SPY/QQQ. Private portfolio checkpoints still expire after 24 hours.
+
+No ninth migration is required. The existing `0008_membership.sql` includes the
+PL/pgSQL name-conflict directives for its season functions; changing that file
+does not itself apply it to Supabase.
+
+After deployment, verify F3's leaders and prices, not only its member count.
+Check Worker logs for `Too many subrequests` and verify that `/api/leaderboard`
+never answers 200 with nonzero `unpriced`. The reproduction and budget checks
+are recorded in `PLANNING/LEADERBOARD-PRICE-OUTAGE-AUDIT.md`.
+
 ## Five-minute portfolio recovery (2026-09-15)
 
 No migration, credential or namespace is needed. Deploy the Worker and the
@@ -46,9 +64,10 @@ and [cron propagation](https://developers.cloudflare.com/workers/configuration/c
 
 ## Phase 10 — Research
 
-Research adds no migration, secret, namespace or cron. The last migration is
-still `0007_stop_orders.sql`, applied and verified on 2026-09-02 as recorded in
-`PLANNING/DIRECTIONS.MD`. The existing Alpaca and Finnhub runtime keys are reused.
+Research added no migration, secret, namespace or cron. At its release the last
+migration was `0007_stop_orders.sql`; the later membership fix added `0008`.
+There are now eight migration files. The existing Alpaca and Finnhub runtime
+keys are reused.
 
 Before deploying, replace `SEC_CONTACT` in `wrangler.jsonc` with a reachable
 contact. This is a public runtime var, not a `VITE_` build variable and not a

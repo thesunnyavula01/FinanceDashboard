@@ -6,6 +6,7 @@ import {
   DEFAULT_SESSION,
   exchangeDate,
   exchangeTime,
+  MarketDataMap,
   type CalendarDay,
   type DailyBar,
   type IntradayBar,
@@ -206,6 +207,7 @@ async function buildSessionHistory({
   let degraded = false;
   try {
     bars = await dailyBars(env, symbols, seasonStart, today, waitUntil);
+    degraded = bars instanceof MarketDataMap && bars.unavailable.size > 0;
   } catch (err) {
     // A curve is worth drawing short rather than not at all, and the member is
     // told the difference rather than shown a truncated line as if it were
@@ -384,12 +386,14 @@ async function buildIntradayHistory({
 
   if (dailyResult.ok) {
     daily = dailyResult.value;
+    degraded ||= dailyResult.value.unavailable.size > 0;
   } else {
     console.error("Daily bars unavailable for the intraday curve:", dailyResult.reason);
     degraded = true;
   }
 
   if (minuteResult.ok) {
+    degraded ||= minuteResult.value.unavailable.size > 0;
     // Regular hours only, before anything else looks at these. A bar feed does
     // not distinguish 09:35 from 06:35, and letting the pre-market through
     // would stretch the axis from six and a half hours to sixteen and hand the

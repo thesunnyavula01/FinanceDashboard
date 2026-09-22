@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { assertCompleteSeason, writeBackup, usableSavedPrice, readSavedPrices,
-  BACKUP_PREFIX, SAVED_PRICES_KEY, MAX_BACKUP_BYTES, type BackupSeason } from "./backup.ts";
+  BACKUP_PREFIX, SAVED_PRICES_KEY, SAVED_PRICE_RETENTION_SECONDS, MAX_BACKUP_BYTES, type BackupSeason } from "./backup.ts";
 import type { Quote } from "../market/provider.ts";
 
 const now = new Date("2026-09-15T15:00:00Z");
@@ -31,7 +31,8 @@ test("checkpoints preserve whole books, expire after 24 hours, and isolate publi
   assert.deepEqual(backup.season, season());
   assert.equal(backup.prices.AAPL.quote.price, 150);
   assert.equal(writes.length, 2, "576 KV writes/day, not a write for each member or symbol");
-  assert.ok(writes.every((w) => w.options.expirationTtl === 86400));
+  assert.equal(writes[0]!.options.expirationTtl, 86400);
+  assert.equal(writes[1]!.options.expirationTtl, SAVED_PRICE_RETENTION_SECONDS);
   assert.ok(!values.get(SAVED_PRICES_KEY)!.includes("cash"));
   await writeBackup(kv, season(), new Map(), new Date(now.getTime() + 300000), await readSavedPrices(kv));
   assert.equal([...values.keys()].filter((key) => key.startsWith(BACKUP_PREFIX)).length, 2);
@@ -60,10 +61,26 @@ test("oversized checkpoints fail without touching previous checkpoints", async (
 
 test("expired, future-dated and invalid saved prices are never restored", () => {
   assert.equal(usableSavedPrice({ quote, savedAt: now.toISOString() }, now.getTime()), true);
-  for (const savedAt of ["invalid", "2026-09-13T15:00:00Z", "2026-09-16T15:00:00Z"]) {
+  assert.equal(usableSavedPrice({ quote, savedAt: "2026-09-11T15:00:00Z" }, now.getTime()), true,
+    "saved display prices bridge weekends and holidays");
+  for (const savedAt of ["invalid", "2026-09-07T15:00:00Z", "2026-09-16T15:00:00Z"]) {
     assert.equal(usableSavedPrice({ quote, savedAt }, now.getTime()), false);
   }
   assert.equal(usableSavedPrice({ quote: { ...quote, price: 0 }, savedAt: now.toISOString() }, now.getTime()), false);
+});
+
+test("price recovery includes benchmarks and preserves the cache's actual observation time", async () => {
+  const { kv } = kvStub();
+  const observed = now.getTime() - 15_000;
+  await writeBackup(kv, season(), new Map([["AAPL", quote], ["SPY", { ...quote, symbol: "SPY" }]]), now, {},
+    new Map([["AAPL", observed], ["SPY", observed]]));
+  const previous = await readSavedPrices(kv);
+  assert.equal(previous.AAPL.savedAt, new Date(observed).toISOString());
+  assert.equal(previous.SPY.savedAt, new Date(observed).toISOString());
+  await writeBackup(kv, season(), new Map(), new Date(now.getTime() + 3 * 86400000), previous);
+  const recovered = await readSavedPrices(kv);
+  assert.equal(recovered.AAPL.savedAt, previous.AAPL.savedAt);
+  assert.equal(recovered.SPY.savedAt, previous.SPY.savedAt);
 });
 
 test("private backup exports require the admin middleware and never restore money automatically", () => {

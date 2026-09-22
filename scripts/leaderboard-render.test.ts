@@ -187,6 +187,43 @@ test("a failed standings refresh keeps every previously loaded member visible", 
   assert.match(html, /Showing the last loaded standings/);
 });
 
+test("saved prices label affected members and the ranking as provisional with the price time", () => {
+  const html = renderStandings({
+    ...complete,
+    stale: 2,
+    pricesAsOf: "2026-09-17T13:35:00.000Z",
+    rows: [row({ stale: 2 }), complete.rows[1]],
+  });
+  assert.equal(rowsIn(html), 2);
+  assert.match(html, /Your rank \(provisional\)/);
+  assert.match(html, />Saved prices</);
+  assert.match(html, /2 holdings use saved market prices from 09\/17 09:35 ET/);
+  assert.match(html, /Rankings are provisional until current prices return/);
+  assert.match(html, />Saved</);
+});
+
+test("a legacy cost-valued payload cannot present fabricated ranks as authoritative", () => {
+  const html = renderStandings({
+    ...complete,
+    unpriced: 1,
+    rows: [row({ totalReturn: 0, unpriced: 1 }), complete.rows[1]],
+  });
+  assert.match(html, /Rank unavailable/);
+  assert.match(html, /1 holding is valued at purchase cost/);
+  assert.match(html, />Cost</);
+  assert.equal(rowsIn(html), 2, "members remain visible even when their ranks cannot be calculated");
+  const ranks = [...html.matchAll(/<tr class="row[^>]*>\s*<td[^>]*>(.*?)<\/td>/g)]
+    .map((match) => match[1]!.replace(/<[^>]*>/g, ""));
+  assert.deepEqual(ranks, ["—", "—"], "a missing price can affect every member's rank");
+});
+
+test("fully priced standings stay unmarked while missing benchmarks are explained", () => {
+  const fresh = renderStandings(complete);
+  assert.doesNotMatch(fresh, /Saved prices|provisional|Rank unavailable|Benchmark unavailable/);
+  const noBenchmarks = renderStandings({ ...complete, benchmarks: { spy: null, qqq: null } });
+  assert.match(noBenchmarks, /Benchmark unavailable/);
+});
+
 test("a failed member-book refresh keeps positions and fills visible", async () => {
   const html = await renderFailedBook(row(), {
     member: { portfolioId: "pf-ada", userId: "u-ada", displayName: "Ada", role: "member" },

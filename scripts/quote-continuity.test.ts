@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { QueryClient } from "@tanstack/react-query";
-import { LAST_GOOD_QUOTES_KEY, rememberQuotes, retainQuotes } from "../src/lib/quote-continuity.ts";
+import { LAST_GOOD_QUOTES_KEY, displayedQuotes, rememberQuotes, retainQuotes } from "../src/lib/quote-continuity.ts";
 import type { Quote, QuotesResponse } from "../src/lib/quote-types.ts";
 import { resetSessionCache } from "../src/lib/refresh.ts";
 
@@ -60,4 +60,40 @@ test("a delayed successful response cannot overwrite a newer observation", () =>
   const delayed = retainQuotes(["AAPL"], response({ AAPL: quote("AAPL", 150) }), recent.quotes);
   assert.equal(delayed.quotes.AAPL.price, 160);
   assert.equal(delayed.quotes.AAPL.receivedAt, "2026-09-15T15:01:00Z");
+});
+
+test("a stale query cannot hide a newer quote saved by an overlapping query", () => {
+  const old = { ...quote("AAPL", 150), receivedAt: "2026-09-15T15:00:00Z" };
+  const newer = { ...quote("AAPL", 170), receivedAt: "2026-09-15T15:05:00Z" };
+  for (const failed of [false, true]) {
+    const shown = displayedQuotes(["AAPL"], { AAPL: old }, { AAPL: newer }, failed);
+    assert.equal(shown.AAPL.price, 170);
+    assert.equal(shown.AAPL.receivedAt, newer.receivedAt);
+    assert.equal(shown.AAPL.stale, true);
+  }
+  const current = displayedQuotes(["AAPL"], { AAPL: newer }, { AAPL: old }, false);
+  assert.equal(current.AAPL.price, 170);
+  assert.ok(!current.AAPL.stale);
+});
+
+test("quote display stays scoped to held symbols and uses market time when observation time is absent", () => {
+  const old = { ...quote("AAPL", 150), asOf: "2026-09-15T15:00:00Z" };
+  const newer = { ...quote("AAPL", 170), asOf: "2026-09-15T15:05:00Z" };
+  const shown = displayedQuotes(["AAPL", "NVDA"], { AAPL: old }, {
+    AAPL: newer, MSFT: quote("MSFT", 300),
+  }, true);
+  assert.equal(shown.AAPL.price, 170);
+  assert.deepEqual(Object.keys(shown), ["AAPL"]);
+});
+
+test("an invalid price cannot erase the last usable price or reach valuation", () => {
+  const saved = { AAPL: { ...quote("AAPL", 150), receivedAt: "2026-09-15T15:00:00Z" } };
+  for (const price of [NaN, Infinity, 0, -1]) {
+    const invalid = { AAPL: quote("AAPL", price) };
+    const retained = retainQuotes(["AAPL"], response(invalid), saved);
+    assert.equal(retained.quotes.AAPL.price, 150);
+    assert.equal(retained.quotes.AAPL.stale, true);
+    assert.equal(displayedQuotes(["AAPL"], invalid, saved, false).AAPL.price, 150);
+    assert.deepEqual(displayedQuotes(["AAPL"], invalid, {}, false), {});
+  }
 });

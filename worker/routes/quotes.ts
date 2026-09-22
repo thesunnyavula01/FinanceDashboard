@@ -1,8 +1,8 @@
 import { Hono } from "hono";
 import { requireAuth, type AuthedBindings } from "../middleware/auth.ts";
 import { describeMarketError } from "../market/provider.ts";
-import { MAX_SYMBOLS_PER_REQUEST, parseSymbols, quoteCache } from "../market/quotes.ts";
-import { readSavedPrices, usableSavedPrice } from "../analytics/backup.ts";
+import { MAX_SYMBOLS_PER_REQUEST, parseSymbols } from "../market/quotes.ts";
+import { displayQuotes } from "../market/display-quotes.ts";
 
 export const quotes = new Hono<AuthedBindings>();
 
@@ -32,19 +32,9 @@ quotes.get("/", requireAuth, async (c) => {
   }
 
   try {
-    const result = await quoteCache(c.env).get(symbols, (p) => c.executionCtx.waitUntil(p));
+    const result = await displayQuotes(c.env, symbols, (p) => c.executionCtx.waitUntil(p));
     const asOf = new Date().toISOString();
-    const displayed = Object.fromEntries([...result.quotes].map(([symbol, quote]) =>
-      [symbol, { ...quote, receivedAt: asOf, stale: false }]));
-    if (result.unknown.length) {
-      const saved = await readSavedPrices(c.env.QUOTES);
-      for (const symbol of result.unknown) {
-        const entry = saved[symbol];
-        if (usableSavedPrice(entry)) {
-          displayed[symbol] = { ...entry!.quote, receivedAt: entry!.savedAt, stale: true };
-        }
-      }
-    }
+    const displayed = Object.fromEntries(result.quotes);
 
     return c.json({
       quotes: displayed,

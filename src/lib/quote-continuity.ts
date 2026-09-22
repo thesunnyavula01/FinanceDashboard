@@ -3,6 +3,31 @@ import type { QueryClient } from "@tanstack/react-query";
 
 export const LAST_GOOD_QUOTES_KEY = ["last-good-quotes"] as const;
 
+function observedAt(quote: Quote): number {
+  const value = Date.parse(quote.receivedAt ?? quote.asOf ?? "");
+  return Number.isFinite(value) ? value : -Infinity;
+}
+
+function usable(quote: Quote | undefined): quote is Quote {
+  return Boolean(quote && Number.isFinite(quote.price) && quote.price > 0);
+}
+
+/** Overlapping query keys must display the newest known observation of a symbol. */
+export function displayedQuotes(
+  symbols: string[], current: Record<string, Quote> | undefined,
+  saved: Record<string, Quote>, failed: boolean,
+): Record<string, Quote> {
+  const displayed: Record<string, Quote> = {};
+  for (const symbol of symbols) {
+    const response = usable(current?.[symbol]) ? current[symbol] : undefined;
+    const remembered = usable(saved[symbol]) ? saved[symbol] : undefined;
+    const quote = remembered && (!response || observedAt(remembered) > observedAt(response))
+      ? remembered : response;
+    if (quote) displayed[symbol] = failed || quote !== response ? { ...quote, stale: true } : quote;
+  }
+  return displayed;
+}
+
 export function rememberQuotes(client: QueryClient, quotes: Record<string, Quote>): void {
   // This entry has no observer, so the normal five-minute garbage collection
   // would erase it during a prolonged outage. Auth changes still clear it.
@@ -18,15 +43,15 @@ export function retainQuotes(
 ): QuotesResponse {
   const quotes: Record<string, Quote> = {};
   for (const symbol of symbols) {
-    const fresh = next.quotes[symbol];
-    const old = previous[symbol];
+    const fresh = usable(next.quotes[symbol]) ? next.quotes[symbol] : undefined;
+    const old = usable(previous[symbol]) ? previous[symbol] : undefined;
     if (fresh && !fresh.stale) {
       const receivedAt = fresh.receivedAt ?? next.asOf;
-      quotes[symbol] = old && Date.parse(old.receivedAt ?? "") > Date.parse(receivedAt)
+      quotes[symbol] = old && observedAt(old) > Date.parse(receivedAt)
         ? { ...old, stale: true } : { ...fresh, receivedAt };
     }
     else {
-      const saved = fresh && (!old || Date.parse(fresh.receivedAt ?? "") > Date.parse(old.receivedAt ?? ""))
+      const saved = fresh && (!old || observedAt(fresh) > observedAt(old))
         ? fresh : old ?? fresh;
       if (saved) quotes[symbol] = { ...saved, stale: true };
     }

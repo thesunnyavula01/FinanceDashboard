@@ -70,35 +70,56 @@ export class PortfolioError extends Error {
 const SEASON_TTL_MS = 30_000;
 
 let cachedSeason: { season: Season | null; at: number } | null = null;
+let pendingSeason: Promise<Season | null> | null = null;
+let seasonGeneration = 0;
 
 export async function activeSeason(supabase: SupabaseClient): Promise<Season | null> {
   if (cachedSeason && Date.now() - cachedSeason.at < SEASON_TTL_MS) return cachedSeason.season;
+  if (pendingSeason) return pendingSeason;
 
-  const { data, error } = await supabase
-    .from("seasons")
-    .select("id, name, starting_cash, trading_locked, starts_at")
-    .eq("is_active", true)
-    .maybeSingle();
+  const generation = seasonGeneration;
+  const work: Promise<Season | null> = (async () => {
+    try {
+      const { data, error } = await supabase
+        .from("seasons")
+        .select("id, name, starting_cash, trading_locked, starts_at")
+        .eq("is_active", true)
+        .maybeSingle();
 
-  if (error) throw error;
+      // An officer may have rolled over or locked the season while this read
+      // was in flight. Its readers must join the new lookup too, rather than
+      // using the retired season for their next portfolio or order query.
+      if (seasonGeneration !== generation) return activeSeason(supabase);
+      if (error) throw new Error("Could not read the active season.", { cause: error });
 
-  const season: Season | null = data
-    ? {
-        id: data.id,
-        name: data.name,
-        defaultStartingCash: Number(data.starting_cash),
-        tradingLocked: Boolean(data.trading_locked),
-        startsAt: data.starts_at,
-      }
-    : null;
+      const season: Season | null = data
+        ? {
+            id: data.id,
+            name: data.name,
+            defaultStartingCash: Number(data.starting_cash),
+            tradingLocked: Boolean(data.trading_locked),
+            startsAt: data.starts_at,
+          }
+        : null;
 
-  cachedSeason = { season, at: Date.now() };
-  return season;
+      cachedSeason = { season, at: Date.now() };
+      return season;
+    } catch (error) {
+      if (seasonGeneration !== generation) return activeSeason(supabase);
+      throw error;
+    }
+  })().finally(() => {
+    if (pendingSeason === work) pendingSeason = null;
+  });
+  pendingSeason = work;
+  return work;
 }
 
 /** Drops the season cache. For the admin console, once it can edit a season. */
 export function forgetSeason(): void {
+  seasonGeneration += 1;
   cachedSeason = null;
+  pendingSeason = null;
 }
 
 export async function loadPortfolio(
@@ -128,12 +149,16 @@ export async function loadPortfolio(
     );
   }
 
-  const { data: rows, error: positionsError } = await supabase
+  const { data: rows, error: positionsError, count: positionCount } = await supabase
     .from("positions")
-    .select("symbol, qty, avg_cost, multiplier")
+    .select("symbol, qty, avg_cost, multiplier", { count: "exact" })
     .eq("portfolio_id", portfolio.id);
 
-  if (positionsError) throw positionsError;
+  if (positionsError || !Array.isArray(rows) || rows.length !== positionCount) {
+    throw new Error("Could not read complete portfolio positions.", {
+      cause: positionsError ?? { received: rows?.length, expected: positionCount },
+    });
+  }
 
   return {
     id: portfolio.id,

@@ -115,3 +115,38 @@ test("a pair keeps its minimum order size through the search", async () => {
   assert.equal(found.results[0]?.symbol, "BTC/USD");
   assert.equal(found.results[0]?.minOrderSize, 0.000001);
 });
+
+test("a sync writes only the shards that changed, and always the meta", async (t) => {
+  const { syncUniverse, universeMeta } = await import("./universe.ts");
+  const store = new Map<string, string>();
+  const puts: string[] = [];
+  const kv = {
+    get: async (key: string) => (store.has(key) ? JSON.parse(store.get(key)!) : null),
+    put: async (key: string, value: string) => { puts.push(key); store.set(key, value); },
+  };
+  const asset = (symbol: string, name: string) => ({ symbol, name, exchange: "NYSE", tradable: true,
+    fractionable: true, shortable: true, easy_to_borrow: true });
+  let equities = [asset("AAPL", "Apple Inc"), asset("BA", "Boeing Co")];
+  t.mock.method(globalThis, "fetch", async (input: RequestInfo | URL) =>
+    Response.json(String(input).includes("asset_class=crypto") ? [] : equities));
+  const env = { QUOTES: kv, ALPACA_API_KEY_ID: "k", ALPACA_API_SECRET_KEY: "s" } as never;
+
+  forgetShards();
+  await syncUniverse(env);
+  assert.equal(puts.length, 55, "the first sync writes every shard");
+
+  puts.length = 0;
+  await syncUniverse(env);
+  assert.deepEqual(puts, ["universe:meta"], "an unchanged list costs one write");
+
+  puts.length = 0;
+  equities = [asset("AAPL", "Apple Inc"), asset("BAC", "Bank of America Corp")];
+  await syncUniverse(env);
+  assert.deepEqual(puts.sort(), ["universe:meta", "universe:sym:B"]);
+
+  puts.length = 0;
+  await syncUniverse(env, { force: true });
+  assert.equal(puts.length, 55, "a forced sync repairs a shard missing from KV");
+
+  assert.deepEqual(Object.keys((await universeMeta(env))!).sort(), ["count", "syncedAt"]);
+});

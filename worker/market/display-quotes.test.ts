@@ -68,3 +68,15 @@ test("invalid fresh prices use valid durable prices and old observations cannot 
   assert.equal(current.quotes.get("AAPL")?.price, 160);
   assert.equal(current.quotes.get("AAPL")?.stale, true);
 });
+
+test("one saved-price read serves an isolate's polls for a minute", async (t) => {
+  const f = fixture();
+  t.mock.method(quoteCache(f.env), "get", async () => f.live);
+  f.stored = { AAPL: { quote: quote(150), savedAt: new Date().toISOString() } };
+  await Promise.all([displayQuotes(f.env, ["AAPL"]), displayQuotes(f.env, ["AAPL"])]);
+  await displayQuotes(f.env, ["AAPL"]);
+  assert.deepEqual(f.reads, [SAVED_PRICES_KEY], "concurrent and repeated polls share one KV read");
+  forgetDisplayQuotes();
+  await displayQuotes(f.env, ["AAPL"]);
+  assert.equal(f.reads.length, 2);
+});

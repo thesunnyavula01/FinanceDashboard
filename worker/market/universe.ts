@@ -23,8 +23,14 @@ const META_KEY = "universe:meta";
 const SYMBOL_PREFIX = "universe:sym:";
 const NAME_PREFIX = "universe:name:";
 
-/** Shards live for a night; ten minutes of isolate memory is plenty. */
-const SHARD_MEMORY_TTL_MS = 10 * 60_000;
+/**
+ * Shards live for a night, and a sync in this isolate clears them at once, so
+ * an hour of isolate memory costs nothing but saves a KV read per keystroke.
+ */
+const SHARD_MEMORY_TTL_MS = 60 * 60_000;
+/** A missing shard is rechecked after a minute rather than on every keystroke. */
+const MISSING_SHARD_TTL_MS = 60_000;
+const META_MEMORY_TTL_MS = 10 * 60_000;
 
 const FRACTIONABLE = 1;
 const SHORTABLE = 2;
@@ -43,6 +49,14 @@ type PackedAsset = [string, string, number] | [string, string, number, number];
 export interface UniverseMeta {
   count: number;
   syncedAt: string;
+}
+
+/**
+ * What is stored. The shard hashes let a sync write only the shards that
+ * changed — most nights a handful of 54 — and never leave the Worker.
+ */
+interface StoredMeta extends UniverseMeta {
+  hashes?: Record<string, string>;
 }
 
 export interface UniverseSearchResult {
@@ -94,35 +108,49 @@ function unpack(packed: PackedAsset): TradableAsset {
   };
 }
 
-const shardMemory = new Map<string, { rows: PackedAsset[]; loadedAt: number }>();
+const shardMemory = new Map<string, { rows: PackedAsset[] | null; loadedAt: number }>();
 
 async function loadShard(env: UniverseEnv, key: string): Promise<PackedAsset[] | null> {
   const cached = shardMemory.get(key);
-  if (cached && Date.now() - cached.loadedAt < SHARD_MEMORY_TTL_MS) return cached.rows;
+  const ttl = cached?.rows ? SHARD_MEMORY_TTL_MS : MISSING_SHARD_TTL_MS;
+  if (cached && Date.now() - cached.loadedAt < ttl) return cached.rows;
 
   const rows = await env.QUOTES.get<PackedAsset[]>(key, "json");
-  if (!rows) return null;
+  shardMemory.set(key, { rows: rows ?? null, loadedAt: Date.now() });
+  return rows ?? null;
+}
 
-  shardMemory.set(key, { rows, loadedAt: Date.now() });
-  return rows;
+let metaMemory: { meta: StoredMeta | null; loadedAt: number } | null = null;
+
+async function storedMeta(env: UniverseEnv): Promise<StoredMeta | null> {
+  if (metaMemory && Date.now() - metaMemory.loadedAt < META_MEMORY_TTL_MS) return metaMemory.meta;
+  const meta = await env.QUOTES.get<StoredMeta>(META_KEY, "json");
+  metaMemory = { meta, loadedAt: Date.now() };
+  return meta;
 }
 
 export async function universeMeta(env: UniverseEnv): Promise<UniverseMeta | null> {
-  return env.QUOTES.get<UniverseMeta>(META_KEY, "json");
+  const meta = await storedMeta(env);
+  return meta && { count: meta.count, syncedAt: meta.syncedAt };
+}
+
+async function sha256(text: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
 /** Guards against two lazy triggers syncing the same 11,000 rows at once. */
 let syncing: Promise<UniverseMeta> | null = null;
 
-export function syncUniverse(env: UniverseEnv): Promise<UniverseMeta> {
+export function syncUniverse(env: UniverseEnv, { force = false } = {}): Promise<UniverseMeta> {
   if (syncing) return syncing;
-  syncing = runSync(env).finally(() => {
+  syncing = runSync(env, force).finally(() => {
     syncing = null;
   });
   return syncing;
 }
 
-async function runSync(env: UniverseEnv): Promise<UniverseMeta> {
+async function runSync(env: UniverseEnv, force: boolean): Promise<UniverseMeta> {
   const assets = await providerFromEnv(env).assets();
 
   const bySymbol = new Map<string, PackedAsset[]>();
@@ -145,20 +173,33 @@ async function runSync(env: UniverseEnv): Promise<UniverseMeta> {
     if (nameShard !== symbolShard) add(byName, nameShard, packed);
   }
 
-  // Every shard is written, empty ones included, so a symbol that disappears
-  // from Alpaca's list does not linger in a stale shard forever.
-  await Promise.all(
-    ALL_SHARDS.flatMap((shard) => [
-      env.QUOTES.put(SYMBOL_PREFIX + shard, JSON.stringify(bySymbol.get(shard) ?? [])),
-      env.QUOTES.put(NAME_PREFIX + shard, JSON.stringify(byName.get(shard) ?? [])),
-    ]),
-  );
+  // Every shard is accounted for, empty ones included, so a symbol that
+  // disappears from Alpaca's list does not linger in a stale shard forever. A
+  // shard is rewritten only when its content differs from what the last sync
+  // stored: KV writes are capped per day and most of the list never changes.
+  // Without hashes (the first sync, or an older meta) everything is written,
+  // and so it is when forced: a cold read found a shard missing that the
+  // hashes would otherwise claim is already stored.
+  const previous = await env.QUOTES.get<StoredMeta>(META_KEY, "json").catch(() => null);
+  const hashes: Record<string, string> = {};
+  const writes: Promise<void>[] = [];
+  for (const [prefix, index] of [[SYMBOL_PREFIX, bySymbol], [NAME_PREFIX, byName]] as const) {
+    for (const shard of ALL_SHARDS) {
+      const key = prefix + shard;
+      const body = JSON.stringify(index.get(shard) ?? []);
+      hashes[key] = await sha256(body);
+      if (force || previous?.hashes?.[key] !== hashes[key]) writes.push(env.QUOTES.put(key, body));
+    }
+  }
+  await Promise.all(writes);
 
-  const meta: UniverseMeta = { count: assets.length, syncedAt: new Date().toISOString() };
+  // Written every sync, so `syncedAt` keeps meaning "checked against Alpaca".
+  const meta: StoredMeta = { count: assets.length, syncedAt: new Date().toISOString(), hashes };
   await env.QUOTES.put(META_KEY, JSON.stringify(meta));
 
   shardMemory.clear();
-  return meta;
+  metaMemory = { meta, loadedAt: Date.now() };
+  return { count: meta.count, syncedAt: meta.syncedAt };
 }
 
 /**
@@ -238,4 +279,5 @@ export async function lookupSymbol(
 /** Drops the in-memory shard cache. Tests only. */
 export function forgetShards(): void {
   shardMemory.clear();
+  metaMemory = null;
 }

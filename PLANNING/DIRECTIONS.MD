@@ -294,8 +294,19 @@ KV cannot do tier 2. A 20s TTL over ~200 symbols is roughly **234,000 writes a
 day** against a free-tier ceiling of 1,000/day (and 1M/month on the paid plan).
 KV also enforces a 60-second floor on `expirationTtl` and edge-caches reads for
 at least that long, so a 20-second TTL is not expressible. KV keeps the job it
-is good at: the nightly asset universe in `worker/market/universe.ts`, written
-~55 times a day and read constantly.
+is good at: the nightly asset universe in `worker/market/universe.ts`, read
+constantly and written once a night. Each shard's hash is kept in
+`universe:meta`, so a sync rewrites only the shards that changed plus the meta,
+usually a handful of writes rather than all 55. A cold read that finds a shard
+missing forces a full write, because the hashes would otherwise claim it is
+already stored. Shards stay in isolate memory for an hour and the meta for ten
+minutes; a missing shard is rechecked after a minute rather than on every
+keystroke.
+
+The read side is budgeted too. `display-quotes.ts` reads the saved-price copy
+whenever a held symbol has no live quote, which on a thin option is every poll,
+so one read serves an isolate for 60 seconds. KV edge-caches a read for that
+long anyway, so the memo costs no freshness.
 
 A concurrent-fetch guard sits in front of tier 3, so twenty members arriving
 together on a cold cache produce one upstream request rather than twenty. A
@@ -862,10 +873,31 @@ Versioned checkpoints live for 24 hours in the existing KV namespace under
 `GET /api/admin/backups` and `GET /api/admin/backups/:key`.
 
 Each checkpoint also includes observed prices. A separate price-only KV value
-provides display fallback after a cold start. Two writes every five minutes are
-576 writes/day, plus the existing nightly universe sync. Checkpoints are capped
-at 2 MiB to keep 288 retained versions within the free storage budget. Capacity
-or truncation errors fail the scheduled run and preserve previous checkpoints.
+provides display fallback after a cold start. Checkpoints are capped at 2 MiB to
+keep 288 retained versions within the free storage budget. Capacity or
+truncation errors fail the scheduled run and preserve previous checkpoints.
+
+**Every run checks; a run writes only what changed.** Writing both values every
+five minutes was 576 of the free plan's 1,000 daily KV writes, and with the
+universe sync it ran the namespace up to its cap. The book's SHA-256, taken over
+a canonical form so PostgREST's row order cannot change it, rides as KV
+metadata on the price key, which the run already reads. That costs no extra key
+and no extra read.
+- **A checkpoint is written when the fingerprint differs, or when the last one
+  is six hours old.** Skipping an unchanged book loses nothing: the newest
+  checkpoint already holds it, so the recovery point is still at most five
+  minutes old. The heartbeat keeps several checkpoints alive inside the 24-hour
+  retention through a quiet weekend.
+- **The price copy is written when the set of symbols changes or a checkpoint is
+  written.** Moving prices are rewritten at most every fifteen minutes, with a
+  six-hour heartbeat. Every saved price keeps its own observation time, so
+  throttling makes a fallback older and never mislabels it. Change is judged on
+  price and previous close, not observation time, because a closed market
+  re-observes the same official close on every run.
+
+A quiet night costs nothing, and a trading day costs one checkpoint per
+five-minute window in which a book changed plus at most ~96 price writes.
+Pinned by `backup.test.ts`.
 This is a recovery copy of the active trading season, not a full Supabase/auth
 backup. See `DEPLOYMENT.md` for recovery and capacity procedures.
 

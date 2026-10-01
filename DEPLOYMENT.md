@@ -58,8 +58,14 @@ larger storage before raising the cap. This export does not include auth users,
 profiles, inactive seasons or historical analytics snapshots, and is not a full
 database disaster-recovery backup.
 
-Budget: 288 checkpoints + 288 price-only writes daily, alongside roughly 55
-universe writes. See [KV limits](https://developers.cloudflare.com/kv/platform/limits/)
+Budget: a run writes only what changed. A checkpoint is written when the book
+changed, and at least every 6 hours. Prices are written when the symbol set
+changes, at most every 15 minutes while prices move, and at least every 6 hours.
+The nightly universe sync rewrites only changed shards plus the meta. The old
+fixed cost of about 631 writes/day is now typically 100–200; a quiet night
+writes almost nothing. When the book is idle, `GET /api/admin/backups` shows
+fewer, older keys. That is expected: the newest one is still the current book.
+See [KV limits](https://developers.cloudflare.com/kv/platform/limits/)
 and [cron propagation](https://developers.cloudflare.com/workers/configuration/cron-triggers/).
 
 ## Phase 10 — Research

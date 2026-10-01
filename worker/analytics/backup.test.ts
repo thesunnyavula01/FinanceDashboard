@@ -1,8 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { assertCompleteSeason, writeBackup, usableSavedPrice, readSavedPrices,
-  BACKUP_PREFIX, SAVED_PRICES_KEY, SAVED_PRICE_RETENTION_SECONDS, MAX_BACKUP_BYTES, type BackupSeason } from "./backup.ts";
+import { assertCompleteSeason, writeBackup, usableSavedPrice, readSavedPrices, readBackupState,
+  fingerprintSeason, BACKUP_PREFIX, SAVED_PRICES_KEY, SAVED_PRICE_RETENTION_SECONDS, MAX_BACKUP_BYTES, type BackupSeason } from "./backup.ts";
 import type { Quote } from "../market/provider.ts";
 
 const now = new Date("2026-09-15T15:00:00Z");
@@ -16,12 +16,23 @@ function season(): BackupSeason {
 }
 function kvStub() {
   const values = new Map<string, string>();
+  const metadata = new Map<string, unknown>();
   const writes: { key: string; options: KVNamespacePutOptions }[] = [];
   const kv = { async put(key: string, value: string, options: KVNamespacePutOptions) {
-    values.set(key, value); writes.push({ key, options });
-  }, async get(key: string) { const value = values.get(key); return value ? JSON.parse(value) : null; } };
+    values.set(key, value); metadata.set(key, options.metadata ?? null); writes.push({ key, options });
+  }, async get(key: string) { const value = values.get(key); return value ? JSON.parse(value) : null; },
+  async getWithMetadata(key: string) {
+    const value = values.get(key);
+    return { value: value ? JSON.parse(value) : null, metadata: metadata.get(key) ?? null };
+  } };
   return { kv: kv as unknown as KVNamespace, values, writes };
 }
+/** One scheduled run, reading what the previous one left, as backupSeason does. */
+async function run(kv: KVNamespace, book: BackupSeason, quotes: Map<string, Quote>, at: Date) {
+  const { prices, state } = await readBackupState(kv);
+  return writeBackup(kv, book, quotes, at, prices, undefined, state);
+}
+const minutes = (n: number) => new Date(now.getTime() + n * 60_000);
 
 test("checkpoints preserve whole books, expire after 24 hours, and isolate public prices", async () => {
   const { kv, values, writes } = kvStub();
@@ -30,7 +41,7 @@ test("checkpoints preserve whole books, expire after 24 hours, and isolate publi
   const backup = JSON.parse(values.get(result.key)!);
   assert.deepEqual(backup.season, season());
   assert.equal(backup.prices.AAPL.quote.price, 150);
-  assert.equal(writes.length, 2, "576 KV writes/day, not a write for each member or symbol");
+  assert.equal(writes.length, 2, "at most two KV writes a run, not a write for each member or symbol");
   assert.equal(writes[0]!.options.expirationTtl, 86400);
   assert.equal(writes[1]!.options.expirationTtl, SAVED_PRICE_RETENTION_SECONDS);
   assert.ok(!values.get(SAVED_PRICES_KEY)!.includes("cash"));
@@ -88,4 +99,69 @@ test("private backup exports require the admin middleware and never restore mone
   assert.ok(admin.indexOf('admin.use("*", requireAuth, requireAdmin)') < admin.indexOf('admin.get("/backups"'));
   const backup = readFileSync(new URL("backup.ts", import.meta.url), "utf8");
   assert.doesNotMatch(backup, /\.(insert|update|upsert|delete|rpc)\(/);
+});
+
+test("an unchanged book is not checkpointed again until the heartbeat", async () => {
+  const { kv, writes } = kvStub();
+  const quotes = new Map([["AAPL", quote]]);
+  const first = await run(kv, season(), quotes, now);
+  assert.equal(first.checkpoint, "written");
+  writes.length = 0;
+
+  const quiet = await run(kv, season(), quotes, minutes(5));
+  assert.equal(quiet.checkpoint, "unchanged");
+  assert.equal(quiet.key, first.key, "the newest checkpoint is still the recovery point");
+  assert.equal(writes.length, 0, "nothing changed, so nothing is written");
+
+  const heartbeat = await run(kv, season(), quotes, minutes(6 * 60));
+  assert.equal(heartbeat.checkpoint, "written", "a live checkpoint must outlast the 24-hour retention");
+  assert.notEqual(heartbeat.key, first.key);
+});
+
+test("any change to the book is checkpointed on the next run", async () => {
+  const { kv, writes } = kvStub();
+  await run(kv, season(), new Map([["AAPL", quote]]), now);
+  writes.length = 0;
+  const book = season();
+  book.portfolios[0]!.pending_orders = [{ id: "order", trail_anchor: "151" }];
+  book.portfolios[0]!.order_count = [{ count: 1 }];
+  const result = await run(kv, book, new Map([["AAPL", quote]]), minutes(5));
+  assert.equal(result.checkpoint, "written");
+  assert.ok(writes.some((write) => write.key.startsWith(BACKUP_PREFIX)));
+  assert.ok(writes.some((write) => write.key === SAVED_PRICES_KEY), "the fingerprint is stored beside the prices");
+});
+
+test("moving prices are rewritten at most every fifteen minutes, a new symbol at once", async () => {
+  const { kv, writes } = kvStub();
+  await run(kv, season(), new Map([["AAPL", quote]]), now);
+  writes.length = 0;
+
+  const moved = new Map([["AAPL", { ...quote, price: 151 }]]);
+  assert.equal((await run(kv, season(), moved, minutes(5))).pricesWritten, false);
+  assert.equal((await readSavedPrices(kv)).AAPL.quote.price, 150, "throttled, still the older observation");
+  assert.equal((await run(kv, season(), moved, minutes(15))).pricesWritten, true);
+  assert.equal((await readSavedPrices(kv)).AAPL.quote.price, 151);
+  assert.equal(writes.length, 1, "prices only; the book did not change");
+
+  writes.length = 0;
+  const added = new Map([["AAPL", { ...quote, price: 151 }], ["SPY", { ...quote, symbol: "SPY" }]]);
+  assert.equal((await run(kv, season(), added, minutes(20))).pricesWritten, true);
+  assert.ok((await readSavedPrices(kv)).SPY, "a newly priced symbol gains its fallback immediately");
+});
+
+test("a closed market re-observing the same close writes nothing", async () => {
+  const { kv, writes } = kvStub();
+  await run(kv, season(), new Map([["AAPL", quote]]), now);
+  writes.length = 0;
+  for (let i = 1; i <= 12; i++) await run(kv, season(), new Map([["AAPL", quote]]), minutes(5 * i));
+  assert.equal(writes.length, 0);
+});
+
+test("the fingerprint ignores the order rows were embedded in", async () => {
+  const a = season(), b = season();
+  a.portfolios[0]!.trades = [{ id: "t1", qty: "1" }, { id: "t2", qty: "2" }];
+  b.portfolios[0]!.trades = [{ qty: "2", id: "t2" }, { id: "t1", qty: "1" }];
+  assert.equal(await fingerprintSeason(a), await fingerprintSeason(b));
+  b.portfolios[0]!.trades[0]!.qty = "3";
+  assert.notEqual(await fingerprintSeason(a), await fingerprintSeason(b));
 });

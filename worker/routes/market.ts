@@ -53,7 +53,7 @@ market.get("/symbols", async (c) => {
 
     if (found.warming) {
       c.executionCtx.waitUntil(
-        syncUniverse(c.env).catch((err) => console.error("Universe sync failed:", err)),
+        syncUniverse(c.env, { force: true }).catch((err) => console.error("Universe sync failed:", err)),
       );
     }
 

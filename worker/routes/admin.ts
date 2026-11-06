@@ -510,6 +510,70 @@ admin.post("/members/:userId/role", async (c) => {
 });
 
 /**
+ * DELETE /api/admin/members/:userId — remove someone from the club.
+ *
+ * Deletes the auth account, and the schema's `on delete cascade` chain takes
+ * the rest with it: profile, every portfolio in every season, positions, fills,
+ * snapshots and resting orders. Nothing here touches those tables directly —
+ * deleting a profile alone would leave an account that can still sign in and
+ * owns nothing, which is worse than either state. It is irreversible; the
+ * console arms it, and the person can only come back by signing up again.
+ *
+ * An officer cannot be removed, only demoted first. That keeps "the club always
+ * has an officer" in set_member_role(), under its lock, rather than restating
+ * it here where two officers removing each other could both pass the check.
+ * The caller is always an officer and can never remove themselves, so at least
+ * one survives any removal.
+ */
+admin.delete("/members/:userId", async (c) => {
+  const userId = c.req.param("userId");
+  if (userId === c.get("user").id) {
+    return c.json(
+      { error: "You cannot remove your own account from the console.", code: "INVALID_REQUEST" },
+      400,
+    );
+  }
+
+  let supabase: SupabaseClient;
+  try {
+    supabase = serviceClient(c.env);
+  } catch (err) {
+    if (err instanceof ConfigError) return c.json({ error: err.message }, 503);
+    throw err;
+  }
+
+  const { data: profile, error: lookup } = await supabase
+    .from("profiles")
+    .select("id, display_name, role")
+    .eq("id", userId)
+    .maybeSingle();
+
+  if (lookup) {
+    console.error("member lookup failed:", lookup);
+    return c.json({ error: "Could not read that member." }, 500);
+  }
+  if (!profile) return c.json({ error: "No such member.", code: "NOT_FOUND" }, 404);
+  if (profile.role === "admin") {
+    return c.json(
+      {
+        error: `${profile.display_name} is an officer. Make them a member first, then remove them.`,
+        code: "OFFICER",
+      },
+      409,
+    );
+  }
+
+  const { error } = await supabase.auth.admin.deleteUser(userId);
+  if (error) {
+    console.error("member removal failed:", error);
+    return c.json({ error: `Could not remove ${profile.display_name}.` }, 500);
+  }
+
+  invalidate();
+  return c.json({ ok: true, userId, displayName: profile.display_name });
+});
+
+/**
  * GET /api/admin/trades — the club's fills, newest first.
  *
  * The blotter an officer corrects from. Filterable by member and symbol,

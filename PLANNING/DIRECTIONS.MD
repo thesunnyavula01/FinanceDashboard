@@ -1365,6 +1365,25 @@ later SELL sold out of would leave that SELL selling shares nobody owned, so it
 raises `FC013` naming the fill to deal with first and the whole transaction
 rolls back. Inventing a book that could not have happened would be worse.
 
+### Removing a member
+
+`DELETE /api/admin/members/:userId` deletes the member's Supabase auth account.
+The schema's `on delete cascade` chain does everything else: profile, every
+portfolio in every season, positions, fills, snapshots and resting orders. No
+migration and no RPC are involved. Deleting only the profile would leave an
+account that can still sign in but owns nothing, which is worse than either
+complete state. The club average history moves too, because the member's
+snapshots are removed with everything else. Removal is permanent, and the only
+way back is to sign up again with the invite code. The roster's Remove button
+is therefore armed.
+
+An officer cannot be removed and has to be made a member first. Nobody can
+remove themselves. Together those keep the last-officer guarantee inside
+`set_member_role()` and its lock: the caller is always an officer who survives
+the removal, so this route does not need its own count, and a second count here
+could race. A removed member's session token stays valid until it expires, but
+every route that touches money finds no portfolio behind it.
+
 ### Arming, and what is not armed
 
 A control that cannot be undone takes two deliberate presses and turns red in
@@ -1733,6 +1752,7 @@ PATCH  /api/admin/seasons/:id         rename, re-fund new joiners, lock trading
 POST   /api/admin/seasons/:id/reset   wipe it back to the starting line
 POST   /api/admin/invite              rotate the code. Old one dies immediately
 POST   /api/admin/members/:id/role    promote or demote
+DELETE /api/admin/members/:id         remove a non-officer and everything they held
 GET    /api/admin/trades              the club's fills, filterable
 DELETE /api/admin/trades/:id          void a fill, then replay the portfolio
 PATCH  /api/admin/trades/:id          correct qty or price, then replay

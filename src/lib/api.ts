@@ -902,6 +902,13 @@ export const api = {
         { authed: true, method: "POST", body: JSON.stringify({ role }) },
       ),
 
+    /** Irreversible: the account and every portfolio it held are deleted. */
+    removeMember: (userId: string) =>
+      request<{ ok: true; userId: string; displayName: string }>(
+        `/admin/members/${encodeURIComponent(userId)}`,
+        { authed: true, method: "DELETE" },
+      ),
+
     trades: (filters: { portfolio?: string; symbol?: string; limit?: number } = {}) => {
       const query = new URLSearchParams();
       if (filters.portfolio) query.set("portfolio", filters.portfolio);

@@ -127,6 +127,11 @@ export function useSetRole() {
   );
 }
 
+/** Delete a member's account and everything they held. Irreversible. */
+export function useRemoveMember() {
+  return useAdminMutation((userId: string) => api.admin.removeMember(userId));
+}
+
 export function useVoidTrade() {
   return useAdminMutation((id: string) => api.admin.voidTrade(id));
 }

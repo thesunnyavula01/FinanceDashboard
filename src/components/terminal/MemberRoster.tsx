@@ -2,17 +2,19 @@ import { useState } from "react";
 import { Panel } from "./Panel";
 import { DataGrid, type Column } from "./DataGrid";
 import { Value } from "./Value";
-import { ActionButton, Feedback, type Outcome } from "./AdminControls";
-import { useFundMissingMembers, useSetRole } from "@/hooks/useAdmin";
+import { ActionButton, ArmedButton, Feedback, type Outcome } from "./AdminControls";
+import { useFundMissingMembers, useRemoveMember, useSetRole } from "@/hooks/useAdmin";
 import { ApiError, type AdminMember } from "@/lib/api";
 import { money, stampET } from "@/lib/format";
 
 /**
  * Who is in the club, and who can run it.
  *
- * The only action here is the role, and it is deliberately not armed: making
- * someone an officer is reversible in one click, and treating it as dangerous
- * would spend the console's one alarm on the thing that is not.
+ * The role is deliberately not armed: making someone an officer is reversible
+ * in one click, and treating it as dangerous would spend the console's one
+ * alarm on the thing that is not. Removing a member is armed, because it
+ * deletes their account and every portfolio they held. An officer has to be
+ * made a member before they can be removed, and nobody can remove themselves.
  *
  * The database refuses to remove the last officer. This screen does not
  * duplicate that check — two officers demoting each other from two laptops
@@ -31,6 +33,7 @@ export function MemberRoster({
 }) {
   const setRole = useSetRole();
   const fundMissing = useFundMissingMembers();
+  const removeMember = useRemoveMember();
   const [outcome, setOutcome] = useState<Outcome | null>(null);
   const [working, setWorking] = useState<string | null>(null);
 
@@ -89,6 +92,28 @@ export function MemberRoster({
         },
       },
     );
+  }
+
+  function remove(member: AdminMember) {
+    setWorking(member.userId);
+    setOutcome(null);
+
+    removeMember.mutate(member.userId, {
+      onSuccess: () => {
+        setWorking(null);
+        setOutcome({
+          tone: "ok",
+          text: `${member.displayName} has been removed, with every portfolio and fill they held.`,
+        });
+      },
+      onError: (err) => {
+        setWorking(null);
+        setOutcome({
+          tone: "error",
+          text: err instanceof ApiError ? err.message : `Could not remove ${member.displayName}.`,
+        });
+      },
+    });
   }
 
   const columns: Column<AdminMember>[] = [
@@ -159,22 +184,33 @@ export function MemberRoster({
       key: "action",
       header: "",
       align: "right",
-      width: "10rem",
+      width: "17rem",
       render: (m) => (
-        <ActionButton
-          onClick={() => changeRole(m)}
-          pending={working === m.userId}
-          // The database says no, but a button that is obviously going to fail
-          // is worse than one that is not there to press.
-          disabled={m.role === "admin" && officers <= 1}
-          title={
-            m.role === "admin" && officers <= 1
-              ? "The club needs at least one officer. Promote someone else first."
-              : undefined
-          }
-        >
-          {m.role === "admin" ? "Make member" : "Make officer"}
-        </ActionButton>
+        <span className="inline-flex items-center justify-end gap-1">
+          <ActionButton
+            onClick={() => changeRole(m)}
+            pending={working === m.userId && setRole.isPending}
+            // The database says no, but a button that is obviously going to fail
+            // is worse than one that is not there to press.
+            disabled={m.role === "admin" && officers <= 1}
+            title={
+              m.role === "admin" && officers <= 1
+                ? "The club needs at least one officer. Promote someone else first."
+                : undefined
+            }
+          >
+            {m.role === "admin" ? "Make member" : "Make officer"}
+          </ActionButton>
+          {/* Officers and the reader get no button rather than one that refuses. */}
+          {m.role !== "admin" && m.userId !== currentUserId && (
+            <ArmedButton
+              label="Remove"
+              armedLabel="Delete member"
+              onConfirm={() => remove(m)}
+              pending={working === m.userId && removeMember.isPending}
+            />
+          )}
+        </span>
       ),
     },
   ];

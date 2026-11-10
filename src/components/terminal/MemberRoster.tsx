@@ -3,18 +3,19 @@ import { Panel } from "./Panel";
 import { DataGrid, type Column } from "./DataGrid";
 import { Value } from "./Value";
 import { ActionButton, ArmedButton, Feedback, type Outcome } from "./AdminControls";
-import { useFundMissingMembers, useRemoveMember, useSetRole } from "@/hooks/useAdmin";
+import { useFundMissingMembers, useRemoveMember, useRenameMember, useSetRole } from "@/hooks/useAdmin";
 import { ApiError, type AdminMember } from "@/lib/api";
 import { money, stampET } from "@/lib/format";
 
 /**
  * Who is in the club, and who can run it.
  *
- * The role is deliberately not armed: making someone an officer is reversible
- * in one click, and treating it as dangerous would spend the console's one
- * alarm on the thing that is not. Removing a member is armed, because it
- * deletes their account and every portfolio they held. An officer has to be
- * made a member before they can be removed, and nobody can remove themselves.
+ * The role and the display name are deliberately not armed: both are
+ * reversible in one click, and treating them as dangerous would spend the
+ * console's one alarm on the things that are not. Removing a member is armed,
+ * because it deletes their account and every portfolio they held. An officer
+ * has to be made a member before they can be removed, and nobody can remove
+ * themselves.
  *
  * The database refuses to remove the last officer. This screen does not
  * duplicate that check — two officers demoting each other from two laptops
@@ -32,10 +33,14 @@ export function MemberRoster({
   activeSeasonId?: string | null;
 }) {
   const setRole = useSetRole();
+  const renameMember = useRenameMember();
   const fundMissing = useFundMissingMembers();
   const removeMember = useRemoveMember();
   const [outcome, setOutcome] = useState<Outcome | null>(null);
   const [working, setWorking] = useState<string | null>(null);
+  // One row at a time is in rename mode; `draft` is that row's unsaved name.
+  const [editing, setEditing] = useState<string | null>(null);
+  const [draft, setDraft] = useState("");
 
   const officers = members.filter((member) => member.role === "admin").length;
 
@@ -116,18 +121,112 @@ export function MemberRoster({
     });
   }
 
+  function startRename(member: AdminMember) {
+    setEditing(member.userId);
+    setDraft(member.displayName);
+    setOutcome(null);
+  }
+
+  function cancelRename() {
+    setEditing(null);
+    setDraft("");
+  }
+
+  function saveRename(member: AdminMember) {
+    const next = draft.trim().replace(/\s+/g, " ");
+    if (next === member.displayName) {
+      cancelRename();
+      return;
+    }
+    if (next.length < 1 || next.length > 40) {
+      setOutcome({ tone: "error", text: "A display name is 1 to 40 characters." });
+      return;
+    }
+
+    setWorking(member.userId);
+    setOutcome(null);
+
+    renameMember.mutate(
+      { userId: member.userId, displayName: next },
+      {
+        onSuccess: (result) => {
+          setWorking(null);
+          cancelRename();
+          setOutcome({
+            tone: "ok",
+            text: `${member.displayName} is now ${result.displayName}.`,
+          });
+        },
+        onError: (err) => {
+          setWorking(null);
+          setOutcome({
+            tone: "error",
+            text: err instanceof ApiError ? err.message : `Could not rename ${member.displayName}.`,
+          });
+        },
+      },
+    );
+  }
+
   const columns: Column<AdminMember>[] = [
     {
       key: "displayName",
       header: "Member",
-      width: "14rem",
+      width: "16rem",
       sortValue: (m) => m.displayName,
-      render: (m) => (
-        <span className="flex items-center gap-1.5">
-          <span className="truncate text-ink">{m.displayName}</span>
-          {m.userId === currentUserId && <span className="keycap">YOU</span>}
-        </span>
-      ),
+      render: (m) =>
+        editing === m.userId ? (
+          <form
+            className="flex items-center gap-1"
+            onSubmit={(event) => {
+              event.preventDefault();
+              saveRename(m);
+            }}
+          >
+            <input
+              value={draft}
+              onChange={(event) => setDraft(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Escape") cancelRename();
+              }}
+              aria-label={`New display name for ${m.displayName}`}
+              maxLength={40}
+              autoFocus
+              autoComplete="off"
+              spellCheck={false}
+              disabled={working === m.userId}
+              className="min-w-0 flex-1 border border-line bg-canvas px-1.5 py-0.5 text-ink focus:border-accent focus:outline-none disabled:text-ink-faint"
+            />
+            <button
+              type="submit"
+              disabled={working === m.userId}
+              className="label cursor-pointer text-accent hover:text-ink disabled:cursor-not-allowed disabled:text-ink-faint"
+            >
+              Save
+            </button>
+            <button
+              type="button"
+              onClick={cancelRename}
+              disabled={working === m.userId}
+              className="label cursor-pointer hover:text-ink disabled:cursor-not-allowed"
+            >
+              Esc
+            </button>
+          </form>
+        ) : (
+          <span className="group flex items-center gap-1.5">
+            <span className="truncate text-ink">{m.displayName}</span>
+            {m.userId === currentUserId && <span className="keycap">YOU</span>}
+            <button
+              type="button"
+              onClick={() => startRename(m)}
+              title={`Rename ${m.displayName}`}
+              className="label shrink-0 cursor-pointer opacity-60 hover:text-accent hover:opacity-100 focus:opacity-100 group-hover:opacity-100"
+            >
+              Rename
+            </button>
+          </span>
+        ),
     },
     {
       key: "role",

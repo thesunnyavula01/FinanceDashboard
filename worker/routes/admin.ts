@@ -574,6 +574,60 @@ admin.delete("/members/:userId", async (c) => {
 });
 
 /**
+ * PATCH /api/admin/members/:userId — change a member's display name.
+ *
+ * Any member, officers and the caller included. The name is presentation only:
+ * nothing keys on it, so this is a plain update of `profiles.display_name`
+ * rather than an RPC, and it is not armed because the next rename undoes it.
+ * The same 1–40 character rule as signup applies, and the column's check
+ * constraint enforces it again underneath.
+ *
+ * The auth account's `user_metadata.display_name` is a signup-time copy that
+ * nothing reads; it is updated best-effort so the two do not drift, and a
+ * failure there does not fail the rename.
+ */
+admin.patch("/members/:userId", async (c) => {
+  const body = await readJson<{ displayName?: unknown }>(c);
+  const displayName =
+    typeof body?.displayName === "string" ? body.displayName.trim().replace(/\s+/g, " ") : "";
+
+  if (displayName.length < 1 || displayName.length > 40) {
+    return c.json({ error: "A display name is 1 to 40 characters.", code: "INVALID_REQUEST" }, 400);
+  }
+
+  let supabase: SupabaseClient;
+  try {
+    supabase = serviceClient(c.env);
+  } catch (err) {
+    if (err instanceof ConfigError) return c.json({ error: err.message }, 503);
+    throw err;
+  }
+
+  const userId = c.req.param("userId");
+  const { data, error } = await supabase
+    .from("profiles")
+    .update({ display_name: displayName })
+    .eq("id", userId)
+    .select("id, display_name")
+    .maybeSingle();
+
+  if (error) {
+    console.error("member rename failed:", error);
+    return c.json({ error: "Could not rename that member." }, 500);
+  }
+  if (!data) return c.json({ error: "No such member.", code: "NOT_FOUND" }, 404);
+
+  const meta = await supabase.auth.admin.updateUserById(userId, {
+    user_metadata: { display_name: displayName },
+  });
+  if (meta.error) console.warn("member rename: auth metadata not updated:", meta.error);
+
+  // The standings cache carries display names, so a rename has to drop it.
+  invalidate();
+  return c.json({ ok: true, userId: data.id, displayName: data.display_name });
+});
+
+/**
  * GET /api/admin/trades — the club's fills, newest first.
  *
  * The blotter an officer corrects from. Filterable by member and symbol,

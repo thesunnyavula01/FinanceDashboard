@@ -909,6 +909,13 @@ export const api = {
         { authed: true, method: "DELETE" },
       ),
 
+    /** Change any member's display name. 1–40 characters after trimming. */
+    renameMember: (userId: string, displayName: string) =>
+      request<{ ok: true; userId: string; displayName: string }>(
+        `/admin/members/${encodeURIComponent(userId)}`,
+        { authed: true, method: "PATCH", body: JSON.stringify({ displayName }) },
+      ),
+
     trades: (filters: { portfolio?: string; symbol?: string; limit?: number } = {}) => {
       const query = new URLSearchParams();
       if (filters.portfolio) query.set("portfolio", filters.portfolio);

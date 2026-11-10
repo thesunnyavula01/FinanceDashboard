@@ -132,6 +132,13 @@ export function useRemoveMember() {
   return useAdminMutation((userId: string) => api.admin.removeMember(userId));
 }
 
+/** Change a member's display name. Reversible, so not armed. */
+export function useRenameMember() {
+  return useAdminMutation((input: { userId: string; displayName: string }) =>
+    api.admin.renameMember(input.userId, input.displayName),
+  );
+}
+
 export function useVoidTrade() {
   return useAdminMutation((id: string) => api.admin.voidTrade(id));
 }

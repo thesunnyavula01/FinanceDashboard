@@ -1389,8 +1389,8 @@ every route that touches money finds no portfolio behind it.
 A control that cannot be undone takes two deliberate presses and turns red in
 between; a reset also demands the season's name typed out, because the only
 confirmation worth anything is one the officer produces themselves. Everything
-reversible - locking trading, promoting a member, renaming a season - is a
-single click. Spending that signal on the safe controls would train an officer
+reversible - locking trading, promoting a member, renaming a season or a
+member - is a single click. Spending that signal on the safe controls would train an officer
 to click through it.
 
 Admin SQLSTATEs continue the order codes: `FC010` would leave the club with no
@@ -1753,6 +1753,7 @@ POST   /api/admin/seasons/:id/reset   wipe it back to the starting line
 POST   /api/admin/invite              rotate the code. Old one dies immediately
 POST   /api/admin/members/:id/role    promote or demote
 DELETE /api/admin/members/:id         remove a non-officer and everything they held
+PATCH  /api/admin/members/:id         rename (display name, 1-40 chars)
 GET    /api/admin/trades              the club's fills, filterable
 DELETE /api/admin/trades/:id          void a fill, then replay the portfolio
 PATCH  /api/admin/trades/:id          correct qty or price, then replay
